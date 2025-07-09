@@ -5,6 +5,7 @@
 class VideoEngine : public QObject {
     Q_OBJECT
 public:
+    Q_INVOKABLE void enableHDR(bool enable);
     explicit VideoEngine(QObject* parent = nullptr);
     ~VideoEngine();
 

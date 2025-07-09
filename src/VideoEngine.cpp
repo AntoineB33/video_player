@@ -47,6 +47,63 @@ VideoEngine::VideoEngine(QObject* parent) : QObject(parent) {
     m_vlcInstance = libvlc_new(sizeof(args)/sizeof(args[0]), args);
 }
 
+void VideoEngine::enableHDR(bool enable) {
+    m_hdrEnabled = enable;
+    
+    if(m_mediaPlayer) {
+        if(enable) {
+            // Apply HDR settings
+            libvlc_media_add_option(m_media, ":avcodec-options=output=10");
+            libvlc_media_add_option(m_media, ":vout=direct3d11");
+            libvlc_media_add_option(m_media, ":output-color-space=bt2020");
+            libvlc_media_add_option(m_media, ":output-color-range=full");
+        } else {
+            // Revert to SDR
+            libvlc_media_add_option(m_media, ":output-color-space=auto");
+            libvlc_media_add_option(m_media, ":output-color-range=auto");
+        }
+    }
+}
+
+void VideoEngine::setupCallbacks() {
+    if(!m_mediaPlayer) return;
+    
+    libvlc_video_set_callbacks(
+        m_mediaPlayer,
+        lock,
+        unlock,
+        display,
+        this
+    );
+    
+    libvlc_video_set_format(
+        m_mediaPlayer, 
+        "RGBA", 
+        m_videoWidth, 
+        m_videoHeight, 
+        m_videoWidth * 4
+    );
+}
+
+// Implement callbacks
+static void *lock(void *opaque, void **planes) {
+    VideoEngine* engine = static_cast<VideoEngine*>(opaque);
+    engine->lockFrame();
+    *planes = engine->frameBuffer();
+    return nullptr; // We're not using private pointer
+}
+
+static void unlock(void *opaque, void *picture, void *const *planes) {
+    Q_UNUSED(picture);
+    VideoEngine* engine = static_cast<VideoEngine*>(opaque);
+    engine->unlockFrame();
+}
+
+static void display(void *opaque, void *picture) {
+    VideoEngine* engine = static_cast<VideoEngine*>(opaque);
+    engine->newFrameAvailable();
+}
+
 void VideoEngine::setOutputWindow(void* handle) {
     if (!m_mediaPlayer) return;
     
