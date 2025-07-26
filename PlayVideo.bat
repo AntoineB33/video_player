@@ -1,37 +1,32 @@
 @echo off
+setlocal enabledelayedexpansion
 
-:: This script plays a video full-screen with no overlays using VLC.
-:: The video file should be in the same folder as this .bat file.
-
-:: --- CONFIGURATION ---
-:: 1. Set the full path to your vlc.exe if it's not the default.
+:: CONFIGURATION
 SET "VLC_PATH=C:\Program Files\VideoLAN\VLC\vlc.exe"
+SET "PLAYLIST_DIR=playlists"
 
-:: 2. Set the name of your video file.
-SET "VIDEO_FILE=C:\Users\N6506\Downloads\Thunderbolts.2025.2160p.iT.WEB-DL.DV.HDR10+.ENG.LATINO.DDP5.1.Atmos.H265.MP4-BEN.THE.MEN\Thunderbolts.2025.2160p.iT.WEB-DL.DV.HDR10+[Ben The Men].mp4"
-:: --- END CONFIGURATION ---
+:: Prompt for playlist name
+set /p "PLAYLIST_NAME=Enter playlist name: "
+SET "PLAYLIST_FILE=%PLAYLIST_DIR%\%PLAYLIST_NAME%.txt"
 
+:: Check if playlist file exists
+if not exist "%PLAYLIST_FILE%" (
+    echo Playlist not found: %PLAYLIST_FILE%
+    pause
+    exit /b
+)
 
-:: Check if VLC exists at the specified path
+:: Check if VLC exists
 if not exist "%VLC_PATH%" (
-    echo VLC Media Player not found at the specified path:
-    echo %VLC_PATH%
-    echo Please update the VLC_PATH in this script.
+    echo VLC not found: %VLC_PATH%
     pause
     exit /b
 )
 
-:: Check if the video file exists
-if not exist "%VIDEO_FILE%" (
-    echo Video file not found: %VIDEO_FILE%
-    echo Please check the VIDEO_FILE path in this script.
-    pause
-    exit /b
+:: Read and play each video in the playlist
+for /f "usebackq tokens=* delims=" %%A in ("%PLAYLIST_FILE%") do (
+    echo Playing: %%A
+    "%VLC_PATH%" "%%A" --fullscreen --no-osd --no-video-title-show vlc://quit
 )
 
-:: Run VLC with options
-:: --fullscreen : Starts in full-screen mode.
-:: --no-osd : Disables all on-screen display (like the pause icon).
-:: --no-video-title-show : Hides the video title at the start.
-:: vlc://quit : Special command to make VLC close after playback finishes.
-"%VLC_PATH%" "%VIDEO_FILE%" --fullscreen --no-osd --no-video-title-show vlc://quit
+endlocal

@@ -335,14 +335,14 @@ def order_table(res, table, roles, dep_pattern):
 def sorter(table, roles, errors, warnings):
     alph = generate_unique_strings(max(len(roles), len(table)))
     path_index = roles.index('path') if 'path' in roles else -1
-    if path_index != -1:
-        for i, row in enumerate(table[1:]):
-            cell = row[path_index]
-            if cell:
-                if not cell.strip():
-                    warnings.append(f"Warning in row {i+1}, column {alph[path_index]}: only whitespace in cell")
-                if not re.match(r'^(https?://|file://)', cell):
-                    warnings.append(f"Warning in row {i+1}, column {alph[path_index]}: {cell!r} is not a valid URL or local path")
+    if path_index == -1:
+        errors.append("Error: 'path' role not found in roles")
+        return table
+    for i, row in enumerate(table[1:]):
+        cell = row[path_index]
+        if cell:
+            if not re.match(r'^(https?://|file://)', cell):
+                warnings.append(f"Warning in row {i+1}, column {alph[path_index]}: {cell!r} is not a valid URL or local path")
     pointed_by = [[] for _ in range(len(table))]
     point_to = [[] for _ in range(len(table))]
     names = [[] for _ in range(len(table))]
@@ -439,7 +439,7 @@ def sorter(table, roles, errors, warnings):
                         pointed_givers[current][cat] = i
                     elif cat not in pointed_givers[current]:
                         warnings.append(f"Redundant attribute {cat!r} in row {current} already given by row {i}")
-                if path_index != -1 and table[i][path_index]:
+                if table[i][path_index]:
                     if table[current][path_index] and not pointed_givers_path[current]:
                         warnings.append(f"Warning in row {current}, column {alph[path_index]}: path already given by row {i}")
                     table[current][path_index] = table[i][path_index]
@@ -453,7 +453,7 @@ def sorter(table, roles, errors, warnings):
     new_index = 0
     for i, row in enumerate(table[1:], start=1):
         staying.append(False)
-        if path_index != -1 and row[path_index]:
+        if row[path_index]:
             valid_row_indexes.append(i)
             staying[i] = True
             new_indexes[i] = new_index
@@ -592,6 +592,10 @@ def sorter(table, roles, errors, warnings):
         i += 1
     res.extend(cat_rows)
     new_table = order_table(res, table, roles, dep_pattern)
+    with open('media_paths.txt', 'w') as f:
+        for i in valid_row_indexes:
+            if table[i][path_index]:
+                f.write(f"{table[i][path_index]}\n")
     return new_table
 
 
