@@ -496,7 +496,8 @@ def sorter(table, errors, warnings):
                             if name not in names:
                                 errors.append(f"Error in row {i}, column {alph[j]}: attribute {name!r} does not exist")
                                 return roles + table
-                            numbers.append(names[name])
+                            if table[names[name]][path_index]:
+                                numbers.append(names[name])
                         numbers = list(map(lambda x: new_indexes[x], numbers))
                         instr_table[i].append(instr_struct(instr_type, match.group("any"), numbers, intervals))
     for i in valid_row_indexes:

@@ -41,7 +41,19 @@ class FullscreenPlayer:
         master.update()  # Force update to ensure frame is created
         master.focus_force()
 
-        vlc_options = "--no-osd --no-video-title-show --quiet --no-embedded-video"
+        # Replace your current VLC options with:
+        vlc_options = [
+            "--no-osd",
+            "--no-video-title-show",
+            "--quiet",
+            "--no-embedded-video",
+            "--avcodec-hw=dxva2",  # Windows hardware decoding
+            "--ffmpeg-hw",          # Enable FFmpeg hardware acceleration
+            "--drop-late-frames",   # Prevent A/V desync
+            "--skip-frames"         # Allow frame skipping during seeks
+        ]
+
+        self.instance = vlc.Instance(" ".join(vlc_options))
         self.instance = vlc.Instance(vlc_options)
         self.player = self.instance.media_player_new()
         self.player.set_hwnd(self.video_frame.winfo_id())
@@ -120,10 +132,21 @@ if __name__ == "__main__":
             default_playlist = None
     for file in all_playlists:
         if file.endswith(".txt"):
-            if default_playlist is not None and file == default_playlist:
-                print(f"* {file} (default)")
-            else:
-                print(f"- {file}")
+            suffix = ''
+            if_default = default_playlist is not None and file == default_playlist
+            if if_default:
+                suffix = " (default)"
+            paths = read_playlist(os.path.join("data/playlists", file))
+            with open(os.path.join("data/playlists", file), 'r') as f:
+                videos = [
+                    line.strip()
+                    for line in f.readlines()
+                    if line.strip()
+                ]
+            for i, path in enumerate(paths):
+                if not os.path.exists(path):
+                    suffix += f"\n\t(video {i + 1} missing : {videos[i]})"
+            print(f"{'>' if if_default else '-'} {file}{suffix}")
     playlist_name = input("Playlist file: ").strip()
     if not playlist_name:
         if default_playlist is not None:
