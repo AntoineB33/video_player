@@ -13,8 +13,17 @@ from tkinter import messagebox
 import vlc
 import base64
 
-# --- CONFIGURATION ---
-PLAYLIST_FILE = "playlists\\hey2.txt"  # Path to your playlist file
+MEDIA_PATH = r"C:\Users\N6506\Home\health\entertainment\news_underground\mediaSorter\programs\mediaSorter_Python\data\media"
+
+# --- Ask user for playlist name via CMD ---
+print("Enter the name of the playlist file (e.g., hey2.txt):")
+playlist_name = input("Playlist file: ").strip()
+
+if not playlist_name.endswith(".txt"):
+    playlist_name += ".txt"
+
+PLAYLIST_FILE = os.path.join("playlists", playlist_name)
+
 
 class FullscreenPlayer:
     def __init__(self, master, playlist):
@@ -40,6 +49,7 @@ class FullscreenPlayer:
         self.video_frame.pack(fill=tk.BOTH, expand=True)
 
         master.update()  # Force update to ensure frame is created
+        master.focus_set()  # Ensure window has focus for key events
 
         vlc_options = "--no-osd --no-video-title-show --quiet"
         self.instance = vlc.Instance(vlc_options)
@@ -50,6 +60,9 @@ class FullscreenPlayer:
         self.events.event_attach(vlc.EventType.MediaPlayerEndReached, self.next_video)
 
         self.load_video()
+
+        self.master.after(100, self.ensure_focus)
+        self.ensure_focus_timer = None
 
     def load_video(self):
         """Load and play the current video from the playlist"""
@@ -80,16 +93,16 @@ class FullscreenPlayer:
             self.load_video()
 
     def seek_forward(self, event):
-        """Skip forward 30 seconds"""
+        """Skip forward 5 seconds"""
         if self.player.is_playing():
             current_time = self.player.get_time()
-            self.player.set_time(current_time + 30000)  # 30 seconds in ms
+            self.player.set_time(current_time + 5000)  # 5 seconds in ms
 
     def seek_backward(self, event):
-        """Skip backward 30 seconds"""
+        """Skip backward 5 seconds"""
         if self.player.is_playing():
             current_time = self.player.get_time()
-            self.player.set_time(max(0, current_time - 30000))  # 30 seconds in ms
+            self.player.set_time(max(0, current_time - 5000))  # 5 seconds in ms
 
     def quit_player(self, event=None):
         self.player.stop()
@@ -103,8 +116,8 @@ def read_playlist(file_path):
         
     with open(file_path, 'r') as f:
         return [
-            url_to_filename(line.strip()) 
-            for line in f.readlines() 
+            os.path.join(MEDIA_PATH, url_to_filename(line.strip())) + ".mp4"
+            for line in f.readlines()
             if line.strip()
         ]
 
