@@ -30,10 +30,15 @@ class FullscreenPlayer:
         master.attributes('-topmost', True)
         master.configure(bg='black')
         master.bind("<Escape>", self.quit_player)
-        master.bind("3", self.next_video)
-        master.bind("1", self.prev_video)
+        # Replace number key bindings for navigation
+        master.bind("n", self.next_video)  # 'n' for next video
+        master.bind("p", self.prev_video)  # 'p' for previous video
         master.bind("<Right>", self.seek_forward)
         master.bind("<Left>", self.seek_backward)
+        
+        # Add bindings for percentage seeking (0-9 keys)
+        for i in range(10):
+            master.bind(str(i), lambda event, x=i: self.seek_to_percentage(x / 10.0))
 
         self.video_frame = tk.Frame(master, bg='black')
         self.video_frame.pack(fill=tk.BOTH, expand=True)
@@ -41,7 +46,7 @@ class FullscreenPlayer:
         master.update()  # Force update to ensure frame is created
         master.focus_force()
 
-        # Replace your current VLC options with:
+        # VLC configuration options
         vlc_options = [
             "--no-osd",
             "--no-video-title-show",
@@ -54,7 +59,6 @@ class FullscreenPlayer:
         ]
 
         self.instance = vlc.Instance(" ".join(vlc_options))
-        self.instance = vlc.Instance(vlc_options)
         self.player = self.instance.media_player_new()
         self.player.set_hwnd(self.video_frame.winfo_id())
 
@@ -62,6 +66,14 @@ class FullscreenPlayer:
         self.events.event_attach(vlc.EventType.MediaPlayerEndReached, self.next_video)
 
         self.load_video()
+
+    def seek_to_percentage(self, ratio):
+        """Jump to a specific percentage of the video"""
+        if self.player.is_playing():
+            total_duration = self.player.get_length()
+            if total_duration > 0:
+                target_time = int(total_duration * ratio)
+                self.player.set_time(target_time)
 
     def load_video(self):
         """Load and play the current video from the playlist"""
