@@ -332,12 +332,27 @@ def order_table(res, table, roles, dep_pattern):
         new_table.append(row)
     return new_table
 
-def sorter(table, roles, errors, warnings):
+def sorter(table, errors, warnings):
+    roles = table[0]
+    table = table[1:]
     alph = generate_unique_strings(max(len(roles), len(table)))
-    path_index = roles.index('path') if 'path' in roles else -1
+    interm_roles = [role.strip().lower() for role in roles]
+    path_index = interm_roles.index('path') if 'path' in interm_roles else -1
     if path_index == -1:
         errors.append("Error: 'path' role not found in roles")
-        return table
+        return roles + table
+    for i, row in enumerate(table):
+        for j, cell in enumerate(row):
+            cells = cell.split('; ')
+            for k, c in enumerate(cells):
+                if c and c[-1] == '\r':
+                    c = c[:-1]
+                cells[k] = c.strip()
+                if j != path_index:
+                    cells[k] = cells[k].lower()
+                if cells[k] != c:
+                    warnings.append(f"Warning: cell \"{c!r}\" in row {i}, column {alph[j]} has been transformed to \"{cells[k]!r}\"")
+            row[j] = '; '.join(cells)
     for i, row in enumerate(table[1:]):
         cell = row[path_index]
         if cell:
@@ -352,12 +367,12 @@ def sorter(table, roles, errors, warnings):
                     try:
                         int(name)
                         errors.append(f"Error in row {i}, column {alph[j]}: {name!r} is not a valid name")
-                        return table
+                        return roles + table
                     except ValueError:
                         pass
                     if name in names:
                         errors.append(f"Error in row {i}, column {alph[j]}: name {name!r} already exists in row {names[name]}")
-                        return table
+                        return roles + table
                     names[name] = i
     attributes = {}
     attributes_table = [{} for _ in range(len(table))]
@@ -371,23 +386,23 @@ def sorter(table, roles, errors, warnings):
                 for instr in cell_list:
                     if not instr:
                         errors.append(f"Error in row {i}, column {alph[j]}: empty attribute name")
-                        return table
+                        return roles + table
                     try:
                         k = int(instr)
                         if k < 1 or k > len(table)-1:
                             errors.append(f"Error in row {i}, column {alph[j]}: {instr!r} points to an invalid row {k}")
-                            return table
+                            return roles + table
                     except ValueError:
                         k = -1
                         if instr in names:
                             k = names[instr]
-                    if instr not in attributes:
-                        if k == -1:
-                            k = instr
-                        attributes[instr] = {}
-                    if i not in attributes[instr]:
-                        attributes[instr][i] = is_sprawl
-                        attributes_table[i][instr] = is_sprawl
+                    if k == -1:
+                        k = instr
+                    if k not in attributes:
+                        attributes[k] = {}
+                    if i not in attributes[k]:
+                        attributes[k][i] = is_sprawl
+                        attributes_table[i][k] = is_sprawl
                     else:
                         warnings.append(f"Redundant attribute {instr!r} in row {i}, column {alph[j]}")
     for i in attributes.keys():
@@ -400,7 +415,7 @@ def sorter(table, roles, errors, warnings):
             current = to_check.pop()
             stack.append(current)
             if current not in row:
-                row[current] = attributes[stack[-1]][current]
+                row[current] = attributes[stack[-2]][current]
                 attributes_table[current][i] = row[current]
                 if table[i][path_index]:
                     if table[current][path_index]:
@@ -408,21 +423,20 @@ def sorter(table, roles, errors, warnings):
                     table[current][path_index] = table[i][path_index]
             elif current in stack:
                 errors.append("Error : cycle detected in attributes: " + ' -> '.join(map(str, stack)))
-                return table
-            stack.pop()
-            to_check.extend(attributes[current].keys())
+                return roles + table
+            if current in attributes:
+                to_check.extend(attributes[current].keys())
+            else:
+                stack.pop()
         attributes[i] = row
     valid_row_indexes = []
     new_indexes = list(range(len(table)))
     to_old_indexes = []
-    staying = [False]
     cat_rows = []
     new_index = 0
     for i, row in enumerate(table[1:], start=1):
-        staying.append(False)
         if row[path_index]:
             valid_row_indexes.append(i)
-            staying[i] = True
             new_indexes[i] = new_index
             new_index += 1
             to_old_indexes.append(i)
@@ -431,17 +445,18 @@ def sorter(table, roles, errors, warnings):
     for cat in list(attributes.keys()):
         if type(cat) is not int:
             continue
-        attributes[cat] = {k: v for k, v in attributes[cat].items() if staying[k]}
+        attributes[cat] = {k: v for k, v in attributes[cat].items() if table[k][path_index]}
         if len(attributes[cat]) < 2:
             del attributes[cat]
+    attributes_table_copy = [row.copy() for row in attributes_table]
     for row in attributes_table:
         for k in list(row.keys()):
-            if type(k) is int and not staying[k]:
+            if type(k) is int and not table[k][path_index]:
                 del row[k]
     instr_table = [[] for _ in range(len(table))]
     dep_pattern = [cell.split('.') for cell in table[0]]
     for i, row in enumerate(table[1:], start=1):
-        if not staying[i] and i not in attributes:
+        if not table[i][path_index] and i not in attributes:
             continue
         for j, cell in enumerate(row):
             if roles[j] == 'dependencies' and cell:
@@ -450,8 +465,8 @@ def sorter(table, roles, errors, warnings):
                     if instr:
                         instr_split = instr.split('.')
                         if len(instr_split) != len(dep_pattern[j])-1:
-                            errors.append(f"Error in row {i+1}, column {alph[j]}: {instr!r} does not match dependencies pattern {dep_pattern[j]!r}")
-                            return table
+                            errors.append(f"Error in row {i}, column {alph[j]}: {instr!r} does not match dependencies pattern {dep_pattern[j]!r}")
+                            return roles + table
                         if dep_pattern[j]:
                             instr = dep_pattern[j][0] + ''.join([instr_split[i]+dep_pattern[j][i+1] for i in range(len(instr_split))])
                         match = re.match(PATTERN_DISTANCE, instr)
@@ -459,28 +474,28 @@ def sorter(table, roles, errors, warnings):
                         if instr_type := not match:
                             match = re.match(PATTERN_AREAS, instr)
                             if not match:
-                                errors.append(f"Error in row {i+1}, column {alph[j]}: {instr!r} does not match expected format")
-                                return table
+                                errors.append(f"Error in row {i}, column {alph[j]}: {instr!r} does not match expected format")
+                                return roles + table
                             intervals = get_intervals(instr)
                         numbers = []
                         if match.group("number"):
                             number = int(match.group("number"))
                             if number == 0 or number > len(table):
                                 errors.append(f"Error in row {i}, column {alph[j]}: invalid number.")
-                                return table
-                            if staying[number]:
+                                return roles + table
+                            if table[number][path_index]:
                                 numbers.append(number)
                             name = number
                         elif not (name := match.group("name")):
-                            errors.append(f"Error in row {i+1}, column {alph[j]}: {instr!r} does not match expected format")
-                            return table
+                            errors.append(f"Error in row {i}, column {alph[j]}: {instr!r} does not match expected format")
+                            return roles + table
                         if name in attributes:
                             for r in attributes[name].keys():
                                 numbers.append(r)
                         elif match.group("name"):
                             if name not in names:
-                                errors.append(f"Error in row {i+1}, column {alph[j]}: attribute {name!r} does not exist")
-                                return table
+                                errors.append(f"Error in row {i}, column {alph[j]}: attribute {name!r} does not exist")
+                                return roles + table
                             numbers.append(names[name])
                         numbers = list(map(lambda x: new_indexes[x], numbers))
                         instr_table[i].append(instr_struct(instr_type, match.group("any"), numbers, intervals))
@@ -509,7 +524,7 @@ def sorter(table, roles, errors, warnings):
         for i in valid_row_indexes:
             if has_cycle(instr_table, visited, stack, i, p):
                 errors.append(f"Cycle detected: {(' after ' if p else ' before ').join([str(to_old_indexes[i])]+[str(to_old_indexes[k]) for k in stack])}")
-                return table
+                return roles + table
     instr_table_int = []
     for i in valid_row_indexes:
         instr_table_int.append(instr_table[i])
@@ -524,10 +539,10 @@ def sorter(table, roles, errors, warnings):
     
     if not solution:
         errors.append("No valid solution found!")
-        return table
+        return roles + table
     elif type(solution) is string:
         errors.append(f"Error when sorting: {solution!r}")
-        return table
+        return roles + table
     print(f"Solution found: {solution}")
     print(f"Is valid: {sorter.is_valid_placement(solution)}")
     print(f"Distance score: {sorter.calculate_distance_score(solution)}")
@@ -538,12 +553,12 @@ def sorter(table, roles, errors, warnings):
         print(f"Position {i}: {elem}")
 
     res = [0] + [to_old_indexes[alph.index(elem)] for elem in solution]
-    i = 0
+    i = 1
     while i < len(res):
         d = 0
         while d < len(cat_rows):
             e = cat_rows[d]
-            if e in attributes_table[res[i]]:
+            if e in attributes_table_copy[res[i]]:
                 res.insert(i, e)
                 i += 1
                 del cat_rows[d]
@@ -553,34 +568,19 @@ def sorter(table, roles, errors, warnings):
     res.extend(cat_rows)
     new_table = order_table(res, table, roles, dep_pattern)
     with open(f'playlists/{table[0][0]}.txt', 'w') as f:
-        for i in valid_row_indexes:
+        for i in res[1:]:
             if table[i][path_index]:
                 f.write(f"{table[i][path_index]}\n")
-    return new_table
+    return [roles] + new_table
 
 
 if __name__ == "__main__":
-    #take from clipboard
     import pyperclip
     clipboard_content = pyperclip.paste()
     table = [line.split('\t') for line in clipboard_content.split('\n')]
     warnings = []
     errors = []
-    for row in table:
-        for j, cell in enumerate(row):
-            cells = cell.split('; ')
-            for k, c in enumerate(cells):
-                if c[-1] == '\r':
-                    c = c[:-1]
-                cells[k] = c.strip().lower()
-                if cells[k] != c:
-                    warnings.append(f"Warning: cell \"{c!r}\" in row {table.index(row)+1}, column {j+1} has been transformed to \"{cells[k]!r}\"")
-            row[j] = '; '.join(cells)
-    for row in table:
-        row[-1] = row[-1].strip()
-    roles = table[0]
-    result = sorter(table[1:], roles, errors, warnings)
-    result.insert(0, roles)
+    result = sorter(table, errors, warnings)
     if errors:
         print("Errors found:")
         for error in errors:
