@@ -11,59 +11,51 @@ import tkinter as tk
 from tkinter import messagebox
 import vlc
 
-
 # --- CONFIGURATION ---
-# Replace "my_awesome_video.mp4" with the exact name of your video file.
 VIDEO_FILE = r"C:\Users\N6506\Downloads\Thunderbolts.2025.2160p.iT.WEB-DL.DV.HDR10+.ENG.LATINO.DDP5.1.Atmos.H265.MP4-BEN.THE.MEN\Thunderbolts.2025.2160p.iT.WEB-DL.DV.HDR10+[Ben The Men].mp4"
 
-# --- APPLICATION ---
+# Set path to directory containing libvlc.dll
+libvlc_dir = os.path.dirname(os.path.abspath(__file__))
+os.add_dll_directory(libvlc_dir)
+ctypes.CDLL(os.path.join(libvlc_dir, "libvlc.dll"))
 
 class FullscreenPlayer:
     def __init__(self, master, video_path):
         self.master = master
         self.video_path = video_path
 
-        # Check if the video file actually exists before starting
         if not os.path.exists(self.video_path):
-            # Display an error pop-up and quit if the file is not found
-            messagebox.showerror("File Not Found", 
-                                 f"The video file '{self.video_path}' was not found in this directory.")
-            self.master.destroy()
+            messagebox.showerror("File Not Found", f"Video file not found:\n{self.video_path}")
+            master.destroy()
             return
 
-        # Configure the main window to be completely borderless and fullscreen
-        self.master.attributes('-fullscreen', True)
-        self.master.attributes('-topmost', True)
-        self.master.configure(bg='black')
-        self.master.bind("<Escape>", self.quit_player) # Bind Escape key to the quit function
+        master.attributes('-fullscreen', True)
+        master.attributes('-topmost', True)
+        master.configure(bg='black')
+        master.bind("<Escape>", self.quit_player)
 
-        # Create a frame to hold the video output
-        self.video_frame = tk.Frame(self.master, bg='black')
+        self.video_frame = tk.Frame(master, bg='black')
         self.video_frame.pack(fill=tk.BOTH, expand=True)
 
-        # Set up the VLC instance and player
-        # --no-osd disables the on-screen display (like volume bars)
-        # --no-video-title-show disables the video title from appearing at the start
+        master.update()  # Force update to ensure frame is created
+
         vlc_options = "--no-osd --no-video-title-show --quiet"
         self.instance = vlc.Instance(vlc_options)
         self.player = self.instance.media_player_new()
-        
-        # Tell VLC to draw on our tkinter frame
         self.player.set_hwnd(self.video_frame.winfo_id())
 
-        # Load the media
-        self.media = self.instance.media_new(self.video_path)
-        self.player.set_media(self.media)
+        media = self.instance.media_new(self.video_path)
+        self.player.set_media(media)
 
-        # Set up an event handler to close the app when the video finishes
         events = self.player.event_manager()
         events.event_attach(vlc.EventType.MediaPlayerEndReached, self.quit_player)
 
-        # Start playback
+        self.master.after(100, self.start_playback)  # Delay playback
+
+    def start_playback(self):
         self.player.play()
 
     def quit_player(self, event=None):
-        """Stops video playback and closes the application."""
         self.player.stop()
         self.master.destroy()
 
@@ -71,11 +63,7 @@ class FullscreenPlayer:
 if __name__ == "__main__":
     try:
         root = tk.Tk()
-        # Hide the default empty window that appears for a split second
-        root.withdraw() 
-        player = FullscreenPlayer(root, VIDEO_FILE)
-        # Only start the main loop if the player was initialized successfully
-        if 'normal' == root.state():
-             root.mainloop()
+        app = FullscreenPlayer(root, VIDEO_FILE)
+        root.mainloop()
     except Exception as e:
-        messagebox.showerror("Error", f"An unexpected error occurred: {e}")
+        messagebox.showerror("Error", f"Unexpected error:\n{e}")

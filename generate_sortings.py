@@ -298,7 +298,7 @@ def order_table(res, table, roles, dep_pattern):
         for j, cell in enumerate(row):
             if roles[j] == 'dependencies':
                 if cell:
-                    updated_cell = cell.split(';')
+                    updated_cell = cell.split('; ')
                     for d, instr in enumerate(list(updated_cell)):
                         instr_split = instr.split('.')
                         if dep_pattern[j]:
@@ -328,7 +328,7 @@ def order_table(res, table, roles, dep_pattern):
                             elif not updated_roles[j]:
                                 dep_pattern[j][id-1] = new_instr[prev_str_len:str_len]
                                 updated_roles[j] = True
-                    row[j] = ';'.join(updated_cell)
+                    row[j] = '; '.join(updated_cell)
         new_table.append(row)
     return new_table
 
@@ -343,108 +343,75 @@ def sorter(table, roles, errors, warnings):
         if cell:
             if not re.match(r'^(https?://|file://)', cell):
                 warnings.append(f"Warning in row {i+1}, column {alph[path_index]}: {cell!r} is not a valid URL or local path")
-    pointed_by = [[] for _ in range(len(table))]
-    point_to = [[] for _ in range(len(table))]
-    names = [[] for _ in range(len(table))]
+    names = {}
     for i, row in enumerate(table[1:], start=1):
         for j, cell in enumerate(row):
             if roles[j] == 'names' and cell:
-                cell_list = cell.split(';')
+                cell_list = cell.split('; ')
                 for name in cell_list:
-                    if name not in names[i]:
-                        names[i].append(name)
-                    else:
-                        warnings.append(f"Redundant name {name!r} in row {i}, column {alph[j]}")
-    for i, row in enumerate(table[1:], start=1):
-        for j, cell in enumerate(row):
-            if roles[j] == 'pointers':
-                if cell:
-                    cell_list = cell.split(';')
-                    for instr in cell_list:
-                        try:
-                            k = int(instr)
-                            if k < 1 or k > len(table)-1:
-                                errors.append(f"Error in row {i}, column {alph[j]}: {instr!r} points to an invalid row {k}")
-                                return table
-                            else:
-                                pointed_by[k].append(i)
-                                point_to[i].append(k)
-                        except ValueError:
-                            for ii, rrow in enumerate(names[1:], start=1):
-                                if instr in rrow:
-                                    pointed_by[ii].append(i)
-                                    point_to[i].append(ii)
-                                    break
-                            else:
-                                errors.append(f"Error in row {i+1}, column {alph[j]}: row {instr!r} does not exist")
-                                return table
-    # find a cycle
-    def dfs(node, visited, stack):
-        visited.add(node)
-        stack.add(node)
-        for neighbor in point_to[node]:
-            if neighbor not in visited:
-                if dfs(neighbor, visited, stack):
-                    return True
-            elif neighbor in stack:
-                return True
-        stack.remove(node)
-        return False
-    visited = set()
-    stack = set()
-    for i in range(1, len(table)):
-        if i not in visited:
-            if dfs(i, visited, stack):
-                print(f"Cycle found starting at row {i}")
-                return table
+                    try:
+                        int(name)
+                        errors.append(f"Error in row {i}, column {alph[j]}: {name!r} is not a valid name")
+                        return table
+                    except ValueError:
+                        pass
+                    if name in names:
+                        errors.append(f"Error in row {i}, column {alph[j]}: name {name!r} already exists in row {names[name]}")
+                        return table
+                    names[name] = i
     attributes = {}
-    attributes_table = [[] for _ in range(len(table))]
+    attributes_table = [{} for _ in range(len(table))]
     for i, row in enumerate(table[1:], start=1):
         for j, cell in enumerate(row):
-            if roles[j] == 'sprawl':
+            is_sprawl = roles[j] == 'sprawl'
+            if roles[j] == 'attributes' or is_sprawl:
                 if not cell:
                     continue
-                cell_list = cell.split(';')
-                for cat in cell_list:
-                    if cat not in attributes:
-                        if not cat:
-                            errors.append(f"Error in row {i}, column {alph[j]}: empty attribute name")
+                cell_list = cell.split('; ')
+                for instr in cell_list:
+                    if not instr:
+                        errors.append(f"Error in row {i}, column {alph[j]}: empty attribute name")
+                        return table
+                    try:
+                        k = int(instr)
+                        if k < 1 or k > len(table)-1:
+                            errors.append(f"Error in row {i}, column {alph[j]}: {instr!r} points to an invalid row {k}")
                             return table
-                        attributes[cat] = []
-                    if i not in attributes[cat]:
-                        attributes[cat].append(i)
-                        attributes_table[i].append(cat)
+                    except ValueError:
+                        k = -1
+                        if instr in names:
+                            k = names[instr]
+                    if instr not in attributes:
+                        if k == -1:
+                            k = instr
+                        attributes[instr] = {}
+                    if i not in attributes[instr]:
+                        attributes[instr][i] = is_sprawl
+                        attributes_table[i][instr] = is_sprawl
                     else:
-                        warnings.append(f"Redundant attribute {cat!r} in row {i}, column {alph[j]}")
-    for cat in attributes:
-        for i, row in enumerate(names[1:], start=1):
-            if cat in row:
-                errors.append(f"Error: attribute {cat!r} in row {attributes[cat][0]} conflicts with name in row {i}")
-                return table
-    pointed_givers = [dict() for _ in range(len(table))]
-    pointed_givers_path = [0 for _ in range(len(table))]
-    pointed_by_all = [list() for i in range(len(table))]
-    point_to_all = [list() for i in range(len(table))]
-    for i, row in enumerate(pointed_by_all[1:], start=1):
-        to_check = list(pointed_by[i])
+                        warnings.append(f"Redundant attribute {instr!r} in row {i}, column {alph[j]}")
+    for i in attributes.keys():
+        if type(i) is not int:
+            continue
+        stack = [i]
+        to_check = list(attributes[i].keys())
+        row = {}
         while to_check:
             current = to_check.pop()
+            stack.append(current)
             if current not in row:
-                row.append(current)
-                point_to_all[current].append(i)
-                for cat in attributes_table[i]:
-                    if cat not in attributes_table[current]:
-                        attributes_table[current].append(cat)
-                        attributes[cat].append(current)
-                        pointed_givers[current][cat] = i
-                    elif cat not in pointed_givers[current]:
-                        warnings.append(f"Redundant attribute {cat!r} in row {current} already given by row {i}")
+                row[current] = attributes[stack[-1]][current]
+                attributes_table[current][i] = row[current]
                 if table[i][path_index]:
-                    if table[current][path_index] and not pointed_givers_path[current]:
-                        warnings.append(f"Warning in row {current}, column {alph[path_index]}: path already given by row {i}")
+                    if table[current][path_index]:
+                        warnings.append("Warning in row {current}, column {alph[path_index]}: another path given by " + ' -> '.join(map(str, stack)))
                     table[current][path_index] = table[i][path_index]
-                    pointed_givers_path[current] = i
-            to_check.extend(pointed_by[current])
+            elif current in stack:
+                errors.append("Error : cycle detected in attributes: " + ' -> '.join(map(str, stack)))
+                return table
+            stack.pop()
+            to_check.extend(attributes[current].keys())
+        attributes[i] = row
     valid_row_indexes = []
     new_indexes = list(range(len(table)))
     to_old_indexes = []
@@ -462,22 +429,23 @@ def sorter(table, roles, errors, warnings):
         else:
             cat_rows.append(i)
     for cat in list(attributes.keys()):
-        attributes[cat] = list(filter(lambda x: staying[x], attributes[cat]))
-        if not attributes[cat]:
+        if type(cat) is not int:
+            continue
+        attributes[cat] = {k: v for k, v in attributes[cat].items() if staying[k]}
+        if len(attributes[cat]) < 2:
             del attributes[cat]
-        elif len(attributes[cat]) == 1:
-            warnings.append(f"Warning: attribute {cat!r} only in row {attributes[cat][0]}, consider removing it")
-            del attributes[cat]
-    for row in pointed_by_all:
-        row[:] = list(filter(lambda x: staying[x], row))
+    for row in attributes_table:
+        for k in list(row.keys()):
+            if type(k) is int and not staying[k]:
+                del row[k]
     instr_table = [[] for _ in range(len(table))]
     dep_pattern = [cell.split('.') for cell in table[0]]
     for i, row in enumerate(table[1:], start=1):
-        if not staying[i] and not pointed_by[i]:
+        if not staying[i] and i not in attributes:
             continue
         for j, cell in enumerate(row):
             if roles[j] == 'dependencies' and cell:
-                cell_list = cell.split(';')
+                cell_list = cell.split('; ')
                 for instr in cell_list:
                     if instr:
                         instr_split = instr.split('.')
@@ -502,32 +470,24 @@ def sorter(table, roles, errors, warnings):
                                 return table
                             if staying[number]:
                                 numbers.append(number)
-                            for pointer in pointed_by_all[number]:
-                                numbers.append(pointer)
-                        elif name := match.group("name"):
-                            if name in attributes:
-                                for r in attributes[name]:
-                                    numbers.append(r)
-                            else:
-                                for ii, rrow in enumerate(names[1:], start=1):
-                                    if name in rrow:
-                                        number = ii
-                                        if staying[number]:
-                                            numbers.append(number)
-                                        for pointer in pointed_by_all[number]:
-                                            numbers.append(pointer)
-                                        break
-                                else:
-                                    errors.append(f"Error in row {i+1}, column {alph[j]}: attribute {name!r} does not exist")
-                                    return table
-                        else:
+                            name = number
+                        elif not (name := match.group("name")):
                             errors.append(f"Error in row {i+1}, column {alph[j]}: {instr!r} does not match expected format")
                             return table
+                        if name in attributes:
+                            for r in attributes[name].keys():
+                                numbers.append(r)
+                        elif match.group("name"):
+                            if name not in names:
+                                errors.append(f"Error in row {i+1}, column {alph[j]}: attribute {name!r} does not exist")
+                                return table
+                            numbers.append(names[name])
                         numbers = list(map(lambda x: new_indexes[x], numbers))
                         instr_table[i].append(instr_struct(instr_type, match.group("any"), numbers, intervals))
     for i in valid_row_indexes:
-        for j in point_to_all[i]:
-            instr_table[i] = list(set(instr_table[i] + instr_table[j]))
+        for j in attributes_table[i].keys():
+            if type(j) is int:
+                instr_table[i] = list(set(instr_table[i] + instr_table[j]))
     # detect cycles in instr_table
     def has_cycle(instr_table, visited, stack, node, after=True):
         visited.add(node)
@@ -555,9 +515,9 @@ def sorter(table, roles, errors, warnings):
         instr_table_int.append(instr_table[i])
     sorter = ConstraintSorter(alph[:len(valid_row_indexes)])
     go(alph, instr_table_int, sorter)
-    for cat in attributes:
-        sorter.add_group_maximize(set(map(lambda x: new_indexes[x], attributes[cat])))
-    
+    for cat, rows in attributes.items():
+        sorter.add_group_maximize(set(map(lambda x: new_indexes[x], [k for k, v in rows.items() if v])))
+
     # Solve the problem
     print("Solving constraint-based sorting problem...")
     solution = sorter.solve(max_iterations=2000)
@@ -583,7 +543,7 @@ def sorter(table, roles, errors, warnings):
         d = 0
         while d < len(cat_rows):
             e = cat_rows[d]
-            if e in point_to_all[res[i]]:
+            if e in attributes_table[res[i]]:
                 res.insert(i, e)
                 i += 1
                 del cat_rows[d]
@@ -592,7 +552,7 @@ def sorter(table, roles, errors, warnings):
         i += 1
     res.extend(cat_rows)
     new_table = order_table(res, table, roles, dep_pattern)
-    with open('media_paths.txt', 'w') as f:
+    with open(f'playlists/{table[0][0]}.txt', 'w') as f:
         for i in valid_row_indexes:
             if table[i][path_index]:
                 f.write(f"{table[i][path_index]}\n")
@@ -604,17 +564,21 @@ if __name__ == "__main__":
     import pyperclip
     clipboard_content = pyperclip.paste()
     table = [line.split('\t') for line in clipboard_content.split('\n')]
+    warnings = []
+    errors = []
     for row in table:
         for j, cell in enumerate(row):
-            cells = cell.split(';')
+            cells = cell.split('; ')
             for k, c in enumerate(cells):
+                if c[-1] == '\r':
+                    c = c[:-1]
                 cells[k] = c.strip().lower()
-            row[j] = ';'.join(cells)
+                if cells[k] != c:
+                    warnings.append(f"Warning: cell \"{c!r}\" in row {table.index(row)+1}, column {j+1} has been transformed to \"{cells[k]!r}\"")
+            row[j] = '; '.join(cells)
     for row in table:
         row[-1] = row[-1].strip()
     roles = table[0]
-    warnings = []
-    errors = []
     result = sorter(table[1:], roles, errors, warnings)
     result.insert(0, roles)
     if errors:
