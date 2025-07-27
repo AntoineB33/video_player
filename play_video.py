@@ -52,10 +52,19 @@ class FullscreenPlayer:
             "--no-video-title-show",
             "--quiet",
             "--no-embedded-video",
+            
             "--avcodec-hw=dxva2",  # Windows hardware decoding
-            "--ffmpeg-hw",          # Enable FFmpeg hardware acceleration
+
+            # "--avcodec-hw=any --codec av1",
+
+            # "--ffmpeg-hw",          # Enable FFmpeg hardware acceleration
             "--drop-late-frames",   # Prevent A/V desync
-            "--skip-frames"         # Allow frame skipping during seeks
+            "--skip-frames",        # Allow frame skipping during seeks
+
+            "--winrt-d3dcontext",  # Windows 11 Direct3D11 optimization
+            "--d3d11",             # Force Direct3D11 rendering
+            # "--enable-sout",       # Enable streaming output (if needed)
+            "--network-caching=1500"  # Adjust buffer for network streams
         ]
 
         self.instance = vlc.Instance(" ".join(vlc_options))
@@ -64,8 +73,25 @@ class FullscreenPlayer:
 
         self.events = self.player.event_manager()
         self.events.event_attach(vlc.EventType.MediaPlayerEndReached, self.next_video)
+        # self.print_decoder_info()  # Print decoder info for debugging
 
         self.load_video()
+    
+    def print_decoder_info(self):
+        print(self.player.get_marquee())  # Check "decoder" in output
+        print(self.player.video_get_decode_rate())  # Should be near frame rate
+
+    def seek_forward(self, event):
+        """Skip forward 5 seconds"""
+        if self.player.is_playing():
+            current_time = self.player.get_time()
+            self.player.set_time(current_time + 5000)  # 5 seconds in ms
+
+    def seek_backward(self, event):
+        """Skip backward 5 seconds"""
+        if self.player.is_playing():
+            current_time = self.player.get_time()
+            self.player.set_time(max(0, current_time - 5000))  # 5 seconds in ms
 
     def seek_to_percentage(self, ratio):
         """Jump to a specific percentage of the video"""
@@ -102,18 +128,6 @@ class FullscreenPlayer:
         if self.playlist_index > 0:
             self.playlist_index -= 1
             self.load_video()
-
-    def seek_forward(self, event):
-        """Skip forward 5 seconds"""
-        if self.player.is_playing():
-            current_time = self.player.get_time()
-            self.player.set_time(current_time + 5000)  # 5 seconds in ms
-
-    def seek_backward(self, event):
-        """Skip backward 5 seconds"""
-        if self.player.is_playing():
-            current_time = self.player.get_time()
-            self.player.set_time(max(0, current_time - 5000))  # 5 seconds in ms
 
     def quit_player(self, event=None):
         self.player.stop()
