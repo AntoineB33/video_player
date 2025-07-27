@@ -15,16 +15,6 @@ import base64
 
 MEDIA_PATH = r"C:\Users\N6506\Home\health\entertainment\news_underground\mediaSorter\programs\mediaSorter_Python\data\media"
 
-# --- Ask user for playlist name via CMD ---
-print("Enter the name of the playlist file (e.g., hey2.txt):")
-playlist_name = input("Playlist file: ").strip()
-
-if not playlist_name.endswith(".txt"):
-    playlist_name += ".txt"
-
-PLAYLIST_FILE = os.path.join("playlists", playlist_name)
-
-
 class FullscreenPlayer:
     def __init__(self, master, playlist):
         self.master = master
@@ -49,9 +39,9 @@ class FullscreenPlayer:
         self.video_frame.pack(fill=tk.BOTH, expand=True)
 
         master.update()  # Force update to ensure frame is created
-        master.focus_set()  # Ensure window has focus for key events
+        master.focus_force()
 
-        vlc_options = "--no-osd --no-video-title-show --quiet"
+        vlc_options = "--no-osd --no-video-title-show --quiet --no-embedded-video"
         self.instance = vlc.Instance(vlc_options)
         self.player = self.instance.media_player_new()
         self.player.set_hwnd(self.video_frame.winfo_id())
@@ -60,9 +50,6 @@ class FullscreenPlayer:
         self.events.event_attach(vlc.EventType.MediaPlayerEndReached, self.next_video)
 
         self.load_video()
-
-        self.master.after(100, self.ensure_focus)
-        self.ensure_focus_timer = None
 
     def load_video(self):
         """Load and play the current video from the playlist"""
@@ -123,12 +110,36 @@ def read_playlist(file_path):
 
 # --- Entry Point ---
 if __name__ == "__main__":
+    # --- Ask user for playlist name via CMD ---
+    print("available playlists:")
+    all_playlists = os.listdir("data/playlists")
+    default_playlist = None
+    with open("data/default_playlist.txt", "r") as f:
+        default_playlist = f.read().strip()
+        if default_playlist not in all_playlists:
+            default_playlist = None
+    for file in all_playlists:
+        if file.endswith(".txt"):
+            if default_playlist is not None and file == default_playlist:
+                print(f"* {file} (default)")
+            else:
+                print(f"- {file}")
+    playlist_name = input("Playlist file: ").strip()
+    if not playlist_name:
+        if default_playlist is not None:
+            playlist_name = default_playlist
+
+    if not playlist_name.endswith(".txt"):
+        playlist_name += ".txt"
+
+    playlist_file = os.path.join("data/playlists", playlist_name)
     try:
-        playlist = read_playlist(PLAYLIST_FILE)
+        playlist = read_playlist(playlist_file)
         if not playlist:
             messagebox.showerror("Error", "No valid videos found in playlist!")
             sys.exit(1)
-            
+        with open("data/default_playlist.txt", "w") as f:
+            f.write(playlist_name)
         root = tk.Tk()
         app = FullscreenPlayer(root, playlist)
         root.mainloop()

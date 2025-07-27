@@ -567,7 +567,7 @@ def sorter(table, errors, warnings):
         i += 1
     res.extend(cat_rows)
     new_table = order_table(res, table, roles, dep_pattern)
-    with open(f'playlists/{table[0][0]}.txt', 'w') as f:
+    with open(f'data/playlists/{table[0][0]}.txt', 'w') as f:
         for i in res[1:]:
             if table[i][path_index]:
                 f.write(f"{table[i][path_index]}\n")
