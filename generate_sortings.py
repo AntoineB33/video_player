@@ -405,30 +405,33 @@ def sorter(table, errors, warnings):
                         attributes_table[i][k] = is_sprawl
                     else:
                         warnings.append(f"Redundant attribute {instr!r} in row {i}, column {alph[j]}")
-    for i in attributes.keys():
-        if type(i) is not int:
-            continue
-        stack = [i]
-        to_check = list(attributes[i].keys())
-        row = {}
-        while to_check:
-            current = to_check.pop()
-            stack.append(current)
-            if current not in row:
-                row[current] = attributes[stack[-2]][current]
-                attributes_table[current][i] = row[current]
-                if table[i][path_index]:
-                    if table[current][path_index]:
-                        warnings.append("Warning in row {current}, column {alph[path_index]}: another path given by " + ' -> '.join(map(str, stack)))
-                    table[current][path_index] = table[i][path_index]
-            elif current in stack:
-                errors.append("Error : cycle detected in attributes: " + ' -> '.join(map(str, stack)))
-                return roles + table
-            if current in attributes:
-                to_check.extend(attributes[current].keys())
-            else:
-                stack.pop()
-        attributes[i] = row
+    def accumulate_dependencies(graph):
+        def dfs(node, visited, path):
+            if node in path:
+                cycle_start = path.index(node)
+                cycle = path[cycle_start:] + [node]
+                raise ValueError(f"Cycle detected: {' -> '.join(cycle)}")
+            if node in cache:
+                return cache[node]
+
+            path.append(node)
+            accumulated = set()
+            if type(node) is int:
+                for neighbor in graph.get(node, []):
+                    accumulated.add(neighbor)
+                    accumulated.update(dfs(neighbor, visited, path.copy()))
+            path.pop()
+            cache[node] = accumulated
+            return accumulated
+
+        cache = {}
+        result = {}
+        for node in graph:
+            result[node] = {v: for v in list(dfs(node, set(), []))}
+        return result
+
+    attributes = accumulate_dependencies(attributes)
+
     valid_row_indexes = []
     new_indexes = list(range(len(table)))
     to_old_indexes = []

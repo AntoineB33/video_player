@@ -1,0 +1,33 @@
+import os
+import shutil
+import pyperclip
+import re
+import sys
+from url_to_filename import url_to_filename
+
+# === CONFIGURATION ===
+destination_folder = r'C:\Users\N6506\Home\health\entertainment\news_underground\mediaSorter\media'  # Change to your target folder
+
+# Read clipboard content
+clipboard_content = pyperclip.paste()
+
+file_path = sys.argv[1] if len(sys.argv) > 1 else None
+
+if file_path and clipboard_content and os.path.isfile(file_path) and re.match(r'^(https?://)', clipboard_content):
+    # Get the original file name and extension
+    base_name = os.path.basename(file_path)
+    name, ext = os.path.splitext(base_name)
+
+    new_name = url_to_filename(clipboard_content) + ext
+
+    # Ensure destination directory exists
+    os.makedirs(destination_folder, exist_ok=True)
+
+    # Full path to the new file
+    new_path = os.path.join(destination_folder, new_name)
+
+    # Move and rename the file
+    shutil.move(file_path, new_path)
+    print(f"File moved to: {new_path}")
+else:
+    print("Clipboard does not contain a valid quoted file path.")
