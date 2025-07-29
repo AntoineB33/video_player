@@ -332,6 +332,37 @@ def order_table(res, table, roles, dep_pattern):
         new_table.append(row)
     return new_table
 
+def accumulate_dependencies(graph):
+    def dfs(node, visited, path, prev_neighbors):
+        cycle_start = path.index(node)
+        if cycle_start != -1:
+            cycle = path[cycle_start:] + [node]
+            raise ValueError(f"Cycle detected: {' -> '.join(cycle)}")
+        # if node in result:
+        #     return result[node]
+
+        path.append(node)
+        new_neighbors = {}
+        for neighbor in graph[node]:
+            if neighbor in prev_neighbors:
+                if prev_neighbors[neighbor][1] == 0 or graph[node][neighbor] == 1:
+                    warnings.append(f"Warning: {neighbor!r} has a redundant dependency {prev_neighbors[neighbor][0]!r} given by {' <- '.join(path[path.index(neighbor):] + [neighbor])}")
+            new_neighbors[neighbor] = [node, graph[node][neighbor]]
+        new_neighbors.update(prev_neighbors)
+        accumulated = {}
+        for neighbor in graph[node]:
+            accumulated.update(dfs(neighbor, visited, path.copy(), new_neighbors))
+        accumulated.update(set(graph[node].keys()))
+        
+        path.pop()
+        # result[node] = accumulated
+        return accumulated
+
+    result = {}
+    for node in graph:
+        result[node] = dfs(node, set(), [], {})
+    return result
+
 def sorter(table, errors, warnings):
     roles = table[0]
     table = table[1:]
@@ -375,7 +406,6 @@ def sorter(table, errors, warnings):
                         return roles + table
                     names[name] = i
     attributes = {}
-    attributes_table = [{} for _ in range(len(table))]
     for i, row in enumerate(table[1:], start=1):
         for j, cell in enumerate(row):
             is_sprawl = roles[j] == 'sprawl'
@@ -402,36 +432,10 @@ def sorter(table, errors, warnings):
                         attributes[k] = {}
                     if i not in attributes[k]:
                         attributes[k][i] = is_sprawl
-                        attributes_table[i][k] = is_sprawl
                     else:
                         warnings.append(f"Redundant attribute {instr!r} in row {i}, column {alph[j]}")
-    def accumulate_dependencies(graph):
-        def dfs(node, visited, path):
-            if node in path:
-                cycle_start = path.index(node)
-                cycle = path[cycle_start:] + [node]
-                raise ValueError(f"Cycle detected: {' -> '.join(cycle)}")
-            if node in cache:
-                return cache[node]
-
-            path.append(node)
-            accumulated = set()
-            if type(node) is int:
-                for neighbor in graph.get(node, []):
-                    accumulated.add(neighbor)
-                    accumulated.update(dfs(neighbor, visited, path.copy()))
-            path.pop()
-            cache[node] = accumulated
-            return accumulated
-
-        cache = {}
-        result = {}
-        for node in graph:
-            result[node] = {v: for v in list(dfs(node, set(), []))}
-        return result
 
     attributes = accumulate_dependencies(attributes)
-
     valid_row_indexes = []
     new_indexes = list(range(len(table)))
     to_old_indexes = []
@@ -451,11 +455,11 @@ def sorter(table, errors, warnings):
         attributes[cat] = {k: v for k, v in attributes[cat].items() if table[k][path_index]}
         if len(attributes[cat]) < 2:
             del attributes[cat]
-    attributes_table_copy = [row.copy() for row in attributes_table]
-    for row in attributes_table:
-        for k in list(row.keys()):
-            if type(k) is int and not table[k][path_index]:
-                del row[k]
+    attributes_table = [set() for _ in range(len(table))]
+    for attr, deps in attributes.items():
+        if type(attr) is not int or table[attr][path_index]:
+            for dep in deps:
+                attributes_table[dep].add(attr)
     instr_table = [[] for _ in range(len(table))]
     dep_pattern = [cell.split('.') for cell in table[0]]
     for i, row in enumerate(table[1:], start=1):
@@ -504,7 +508,7 @@ def sorter(table, errors, warnings):
                         numbers = list(map(lambda x: new_indexes[x], numbers))
                         instr_table[i].append(instr_struct(instr_type, match.group("any"), numbers, intervals))
     for i in valid_row_indexes:
-        for j in attributes_table[i].keys():
+        for j in attributes_table[i]:
             if type(j) is int:
                 instr_table[i] = list(set(instr_table[i] + instr_table[j]))
     # detect cycles in instr_table
@@ -562,7 +566,7 @@ def sorter(table, errors, warnings):
         d = 0
         while d < len(cat_rows):
             e = cat_rows[d]
-            if e in attributes_table_copy[res[i]]:
+            if e in attributes_table[res[i]]:
                 res.insert(i, e)
                 i += 1
                 del cat_rows[d]
