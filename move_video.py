@@ -4,9 +4,10 @@ import pyperclip
 import re
 import sys
 from url_to_filename import url_to_filename
+from config import MEDIA_PATH
 
 # === CONFIGURATION ===
-destination_folder = r'C:\Users\N6506\Home\health\entertainment\news_underground\mediaSorter\media'  # Change to your target folder
+destination_folder = MEDIA_PATH  # Use config
 
 # Read clipboard content
 clipboard_content = pyperclip.paste()
@@ -26,8 +27,11 @@ if file_path and clipboard_content and os.path.isfile(file_path) and re.match(r'
     # Full path to the new file
     new_path = os.path.join(destination_folder, new_name)
 
+    if os.path.exists(new_path):
+        input(f"File {new_name} already exists in {destination_folder}.")
+
     # Move and rename the file
     shutil.move(file_path, new_path)
     print(f"File moved to: {new_path}")
 else:
-    print("Clipboard does not contain a valid quoted file path.")
+    input("Clipboard does not contain a valid quoted file path.")

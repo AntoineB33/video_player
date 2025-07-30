@@ -12,11 +12,14 @@ def filename_to_url(filename: str) -> str:
     """
     Decode a Windows-safe filename back to the original URL.
     """
-    padding_needed = 4 - (len(filename) % 4)
-    if padding_needed != 4:
-        filename += '=' * padding_needed  # Restore padding
-    decoded = base64.urlsafe_b64decode(filename.encode('ascii')).decode('utf-8')
-    return decoded
+    try:
+        padding_needed = 4 - (len(filename) % 4)
+        if padding_needed != 4:
+            filename += '=' * padding_needed  # Restore padding
+        decoded = base64.urlsafe_b64decode(filename.encode('ascii')).decode('utf-8')
+        return decoded
+    except (base64.binascii.Error, UnicodeDecodeError) as e:
+        return ""
 
 if __name__ == "__main__":
     url = pyperclip.paste()

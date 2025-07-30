@@ -2,6 +2,7 @@ import os
 import sys
 import ctypes
 from url_to_filename import url_to_filename
+from config import MEDIA_PATH, PLAYLISTS_PATH, DEFAULT_PLAYLIST_FILE
 
 # Set path to directory containing libvlc.dll
 libvlc_dir = os.path.dirname(os.path.abspath(__file__))
@@ -12,8 +13,6 @@ import tkinter as tk
 from tkinter import messagebox
 import vlc
 import base64
-
-MEDIA_PATH = r"C:\Users\N6506\Home\health\entertainment\news_underground\mediaSorter\media"
 
 class FullscreenPlayer:
     def __init__(self, master, playlist):
@@ -150,9 +149,9 @@ def read_playlist(file_path):
 if __name__ == "__main__":
     # --- Ask user for playlist name via CMD ---
     print("available playlists:")
-    all_playlists = os.listdir("data/playlists")
+    all_playlists = os.listdir(PLAYLISTS_PATH)
     default_playlist = None
-    with open("data/default_playlist.txt", "r") as f:
+    with open(DEFAULT_PLAYLIST_FILE, "r") as f:
         default_playlist = f.read().strip()
         if default_playlist not in all_playlists:
             default_playlist = None
@@ -162,8 +161,8 @@ if __name__ == "__main__":
             if_default = default_playlist is not None and file == default_playlist
             if if_default:
                 suffix = " (default)"
-            paths = read_playlist(os.path.join("data/playlists", file))
-            with open(os.path.join("data/playlists", file), 'r') as f:
+            paths = read_playlist(os.path.join(PLAYLISTS_PATH, file))
+            with open(os.path.join(PLAYLISTS_PATH, file), 'r') as f:
                 videos = [
                     line.strip()
                     for line in f.readlines()
@@ -181,13 +180,13 @@ if __name__ == "__main__":
     if not playlist_name.endswith(".txt"):
         playlist_name += ".txt"
 
-    playlist_file = os.path.join("data/playlists", playlist_name)
+    playlist_file = os.path.join(PLAYLISTS_PATH, playlist_name)
     try:
         playlist = read_playlist(playlist_file)
         if not playlist:
             messagebox.showerror("Error", "No valid videos found in playlist!")
             sys.exit(1)
-        with open("data/default_playlist.txt", "w") as f:
+        with open(DEFAULT_PLAYLIST_FILE, "w") as f:
             f.write(playlist_name)
         root = tk.Tk()
         app = FullscreenPlayer(root, playlist)

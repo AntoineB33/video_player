@@ -3,6 +3,7 @@ import random
 from typing import List, Tuple, Set, Optional, Dict
 import itertools
 import string
+from config import PLAYLISTS_PATH
 
 PATTERN_DISTANCE = r'^(?P<prefix>as far as possible from )(?P<any>any)?((?P<number>\d+)|(?P<name>.+))(?P<suffix>)$'
 PATTERN_AREAS = r'^(?P<prefix>.*\|)(?P<any>any)?((?P<number>\d+)|(?P<name>.+))(?P<suffix>\|.*)$'
@@ -334,25 +335,27 @@ def order_table(res, table, roles, dep_pattern):
 
 def accumulate_dependencies(graph):
     def dfs(node, visited, path, prev_neighbors):
-        cycle_start = path.index(node)
-        if cycle_start != -1:
+        if node in path:
+            cycle_start = path.index(node)
             cycle = path[cycle_start:] + [node]
             raise ValueError(f"Cycle detected: {' -> '.join(cycle)}")
         # if node in result:
         #     return result[node]
 
         path.append(node)
-        new_neighbors = {}
+        neighbors = {}
         for neighbor in graph[node]:
             if neighbor in prev_neighbors:
                 if prev_neighbors[neighbor][1] == 0 or graph[node][neighbor] == 1:
                     warnings.append(f"Warning: {neighbor!r} has a redundant dependency {prev_neighbors[neighbor][0]!r} given by {' <- '.join(path[path.index(neighbor):] + [neighbor])}")
-            new_neighbors[neighbor] = [node, graph[node][neighbor]]
+            neighbors[neighbor] = [node, graph[node][neighbor]]
+        new_neighbors = dict(neighbors)
         new_neighbors.update(prev_neighbors)
         accumulated = {}
-        for neighbor in graph[node]:
-            accumulated.update(dfs(neighbor, visited, path.copy(), new_neighbors))
-        accumulated.update(set(graph[node].keys()))
+        for neighbor in neighbors:
+            if neighbor in graph:
+                accumulated.update(dfs(neighbor, visited, path.copy(), new_neighbors))
+        accumulated.update(neighbors)
         
         path.pop()
         # result[node] = accumulated
@@ -575,7 +578,7 @@ def sorter(table, errors, warnings):
         i += 1
     res.extend(cat_rows)
     new_table = order_table(res, table, roles, dep_pattern)
-    with open(f'data/playlists/{table[0][0]}.txt', 'w') as f:
+    with open(f'{PLAYLISTS_PATH}/{table[0][0]}.txt', 'w') as f:
         for i in res[1:]:
             if table[i][path_index]:
                 f.write(f"{table[i][path_index]}\n")
@@ -583,20 +586,27 @@ def sorter(table, errors, warnings):
 
 
 if __name__ == "__main__":
-    import pyperclip
-    clipboard_content = pyperclip.paste()
-    table = [line.split('\t') for line in clipboard_content.split('\n')]
-    warnings = []
-    errors = []
-    result = sorter(table, errors, warnings)
-    if errors:
-        print("Errors found:")
-        for error in errors:
-            print(f"- {error}")
-    if warnings:
-        print("Warnings found:")
-        for warning in warnings:
-            print(f"- {warning}")
-    new_clipboard_content = '\n'.join(['\t'.join(row) for row in result])
-    pyperclip.copy(new_clipboard_content)
-    input("Sorted table copied to clipboard. Press Enter to exit.")
+    try:
+        import pyperclip
+        clipboard_content = pyperclip.paste()
+        table = [line.split('\t') for line in clipboard_content.split('\n')]
+        warnings = []
+        errors = []
+        result = sorter(table, errors, warnings)
+        if errors:
+            print("Errors found:")
+            for error in errors:
+                print(f"- {error}")
+        if warnings:
+            print("Warnings found:")
+            for warning in warnings:
+                print(f"- {warning}")
+        new_clipboard_content = '\n'.join(['\t'.join(row) for row in result])
+        pyperclip.copy(new_clipboard_content)
+        input("Sorted table copied to clipboard. Press Enter to exit.")
+    # except Exception as e:
+    #     print(f"An error occurred: {e}")
+    #     input("Press Enter to exit.")
+    except pyperclip.PyperclipException:
+        print("Clipboard access error. Please ensure you have the pyperclip module installed and your clipboard is accessible.")
+        input("Press Enter to exit.")
