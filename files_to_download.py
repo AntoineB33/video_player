@@ -34,3 +34,4 @@ if __name__ == "__main__":
             print(url)
     else:
         print("No lost URLs found.")
+    input("Press Enter to exit.")

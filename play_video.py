@@ -1,7 +1,7 @@
 import os
 import sys
 import ctypes
-from url_to_filename import url_to_filename
+from encrypt import get_playlist_status
 from config import DECRYPTED_MEDIA_PATH, PLAYLISTS_PATH, DEFAULT_PLAYLIST_FILE
 
 # Set path to directory containing libvlc.dll
@@ -12,7 +12,6 @@ ctypes.CDLL(os.path.join(libvlc_dir, "libvlc.dll"))
 import tkinter as tk
 from tkinter import messagebox
 import vlc
-import base64
 
 class FullscreenPlayer:
     def __init__(self, master, playlist):
@@ -132,60 +131,16 @@ class FullscreenPlayer:
         self.player.stop()
         self.master.destroy()
 
-def read_playlist(file_path):
-    """Read video paths from a text file"""
-    if not os.path.exists(file_path):
-        messagebox.showerror("Error", f"Playlist file not found:\n{file_path}")
-        return []
-        
-    with open(file_path, 'r') as f:
-        return [
-            os.path.join(DECRYPTED_MEDIA_PATH, url_to_filename(line.strip())) + ".mp4"
-            for line in f.readlines()
-            if line.strip()
-        ]
-
 # --- Entry Point ---
 if __name__ == "__main__":
-    # --- Ask user for playlist name via CMD ---
-    print("available playlists:")
-    all_playlists = os.listdir(PLAYLISTS_PATH)
-    default_playlist = None
-    with open(DEFAULT_PLAYLIST_FILE, "r") as f:
-        default_playlist = f.read().strip()
-        if default_playlist not in all_playlists:
-            default_playlist = None
-    for file in all_playlists:
-        if file.endswith(".txt"):
-            suffix = ''
-            if_default = default_playlist is not None and file == default_playlist
-            if if_default:
-                suffix = " (default)"
-            paths = read_playlist(os.path.join(PLAYLISTS_PATH, file))
-            with open(os.path.join(PLAYLISTS_PATH, file), 'r') as f:
-                videos = [
-                    line.strip()
-                    for line in f.readlines()
-                    if line.strip()
-                ]
-            for i, path in enumerate(paths):
-                if not os.path.exists(path):
-                    suffix += f"\n\t(video {i + 1} missing : {videos[i]})"
-            print(f"{'>' if if_default else '-'} {file}{suffix}")
-    playlist_name = input("Playlist file: ").strip()
-    if not playlist_name:
-        if default_playlist is not None:
-            playlist_name = default_playlist
-
-    if not playlist_name.endswith(".txt"):
-        playlist_name += ".txt"
-
+    playlists, playlist_name = get_playlist_status()
     playlist_file = os.path.join(PLAYLISTS_PATH, playlist_name)
     try:
-        playlist = read_playlist(playlist_file)
+        playlist = playlists.get(playlist_name, [])
         if not playlist:
             messagebox.showerror("Error", "No valid videos found in playlist!")
             sys.exit(1)
+        playlist = [os.path.join(DECRYPTED_MEDIA_PATH, video) for video in playlist]
         with open(DEFAULT_PLAYLIST_FILE, "w") as f:
             f.write(playlist_name)
         root = tk.Tk()
