@@ -2,7 +2,7 @@ import os
 import sys
 import ctypes
 from url_to_filename import url_to_filename
-from config import MEDIA_PATH, PLAYLISTS_PATH, DEFAULT_PLAYLIST_FILE
+from config import DECRYPTED_MEDIA_PATH, PLAYLISTS_PATH, DEFAULT_PLAYLIST_FILE
 
 # Set path to directory containing libvlc.dll
 libvlc_dir = os.path.dirname(os.path.abspath(__file__))
@@ -140,7 +140,7 @@ def read_playlist(file_path):
         
     with open(file_path, 'r') as f:
         return [
-            os.path.join(MEDIA_PATH, url_to_filename(line.strip())) + ".mp4"
+            os.path.join(DECRYPTED_MEDIA_PATH, url_to_filename(line.strip())) + ".mp4"
             for line in f.readlines()
             if line.strip()
         ]

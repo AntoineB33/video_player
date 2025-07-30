@@ -4,10 +4,11 @@ import pyperclip
 import re
 import sys
 from url_to_filename import url_to_filename
-from config import MEDIA_PATH
+from encrypt import encrypt_file
+from config import ENCRYPTED_MEDIA_PATH
 
 # === CONFIGURATION ===
-destination_folder = MEDIA_PATH  # Use config
+destination_folder = ENCRYPTED_MEDIA_PATH  # Use config
 
 # Read clipboard content
 clipboard_content = pyperclip.paste()
@@ -29,9 +30,9 @@ if file_path and clipboard_content and os.path.isfile(file_path) and re.match(r'
 
     if os.path.exists(new_path):
         input(f"File {new_name} already exists in {destination_folder}.")
-
-    # Move and rename the file
-    shutil.move(file_path, new_path)
+    
+    # Encrypt the file before moving
+    encrypt_file(file_path, new_path)
     print(f"File moved to: {new_path}")
 else:
     input("Clipboard does not contain a valid quoted file path.")
