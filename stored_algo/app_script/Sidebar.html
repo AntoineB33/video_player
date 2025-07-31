@@ -1,3 +1,12 @@
+Of course. Here is the updated `Sidebar.html` file, which now displays a "Searching..." or "Replacing..." message to provide feedback to the user while the script is running.
+
+-----
+
+### `Sidebar.html`
+
+The script has been modified to update the results `div` immediately when the "Find All" or "Replace All" buttons are clicked, indicating that a process is underway. This message is then replaced by the final results once the operation is complete.
+
+```html
 <!DOCTYPE html>
 <html>
   <head>
@@ -22,6 +31,10 @@
         background-color: #eee;
         cursor: pointer;
       }
+      .status-text {
+        color: #666;
+        font-style: italic;
+      }
     </style>
   </head>
   <body>
@@ -41,18 +54,20 @@
         const findText = document.getElementById('findText').value.trim();
         if (!findText) return;
 
+        const resultDiv = document.getElementById('result');
+        // Add "Searching..." message
+        resultDiv.innerHTML = '<div class="status-text">Searching... ⏳</div>';
+
         google.script.run.withSuccessHandler(function(matches) {
-          const div = document.getElementById('result');
           if (matches.length > 0) {
             let html = `Found ${matches.length} match(es):<ul>`;
             matches.forEach(match => {
-              // Added an onclick event to call a function that activates the cell
               html += `<li><a onclick="goToCell(${match.row}, ${match.col})" title="Value: ${match.value}">Cell ${match.a1}</a></li>`;
             });
             html += `</ul>`;
-            div.innerHTML = html;
+            resultDiv.innerHTML = html;
           } else {
-            div.innerHTML = "No matches found.";
+            resultDiv.innerHTML = "No matches found.";
           }
         }).findMatches(findText);
       }
@@ -62,8 +77,12 @@
         const replaceText = document.getElementById('replaceText').value.trim();
         if (!findText) return;
 
+        const resultDiv = document.getElementById('result');
+        // Add "Replacing..." message
+        resultDiv.innerHTML = '<div class="status-text">Replacing... ⏳</div>';
+
         google.script.run.withSuccessHandler(function() {
-          document.getElementById('result').innerHTML = "Replacement complete.";
+          resultDiv.innerHTML = "Replacement complete. ✅";
         }).replaceMatches(findText, replaceText);
       }
       
@@ -78,3 +97,4 @@
     </script>
   </body>
 </html>
+```
