@@ -19,11 +19,18 @@ function findMatches(findText) {
 
   for (let row = 0; row < values.length; row++) {
     for (let col = 0; col < values[row].length; col++) {
-      const cell = values[row][col];
-      if (typeof cell === 'string') {
-        const parts = cell.split(';').map(s => s.trim());
+      const cellValue = values[row][col];
+      if (typeof cellValue === 'string') {
+        const parts = cellValue.split(';').map(s => s.trim());
         if (parts.includes(findText)) {
-          matches.push({ row: row + 1, col: col + 1, value: cell });
+          // Get A1 notation for the found cell
+          const cellNotation = sheet.getRange(row + 1, col + 1).getA1Notation();
+          matches.push({
+            row: row + 1,
+            col: col + 1,
+            value: cellValue,
+            a1: cellNotation
+          });
         }
       }
     }
@@ -56,4 +63,13 @@ function replaceMatches(findText, replaceText) {
     }
   }
   range.setValues(values);
+}
+
+/**
+ * Activates a specific cell in the spreadsheet.
+ * @param {number} row The row number to activate.
+ * @param {number} col The column number to activate.
+ */
+function activateCell(row, col) {
+  SpreadsheetApp.getActiveSheet().getRange(row, col).activate();
 }

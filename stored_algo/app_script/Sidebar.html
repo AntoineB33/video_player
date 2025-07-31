@@ -3,28 +3,54 @@
   <head>
     <base target="_top">
     <style>
+      body { font-family: sans-serif; }
       input, button {
         margin-top: 8px;
         width: 100%;
+        box-sizing: border-box; /* Ensures padding and border are included in the width */
+      }
+      #result { margin-top: 12px; }
+      ul { list-style-type: none; padding-left: 0; }
+      li a { 
+        display: block;
+        padding: 4px;
+        text-decoration: none;
+        color: #000;
+        border-radius: 3px;
+      }
+      li a:hover {
+        background-color: #eee;
+        cursor: pointer;
       }
     </style>
   </head>
   <body>
-    <label>Find:</label>
+    <label for="findText">Find:</label>
     <input type="text" id="findText">
-    <label>Replace With:</label>
+    
+    <label for="replaceText">Replace With:</label>
     <input type="text" id="replaceText">
+    
     <button onclick="find()">Find All</button>
     <button onclick="replace()">Replace All</button>
+    
     <div id="result"></div>
 
     <script>
       function find() {
         const findText = document.getElementById('findText').value.trim();
+        if (!findText) return;
+
         google.script.run.withSuccessHandler(function(matches) {
           const div = document.getElementById('result');
           if (matches.length > 0) {
-            div.innerHTML = `Found ${matches.length} match(es).`;
+            let html = `Found ${matches.length} match(es):<ul>`;
+            matches.forEach(match => {
+              // Added an onclick event to call a function that activates the cell
+              html += `<li><a onclick="goToCell(${match.row}, ${match.col})" title="Value: ${match.value}">Cell ${match.a1}</a></li>`;
+            });
+            html += `</ul>`;
+            div.innerHTML = html;
           } else {
             div.innerHTML = "No matches found.";
           }
@@ -34,9 +60,20 @@
       function replace() {
         const findText = document.getElementById('findText').value.trim();
         const replaceText = document.getElementById('replaceText').value.trim();
+        if (!findText) return;
+
         google.script.run.withSuccessHandler(function() {
           document.getElementById('result').innerHTML = "Replacement complete.";
         }).replaceMatches(findText, replaceText);
+      }
+      
+      /**
+       * Calls the server-side function to activate a cell.
+       * @param {number} row The row number.
+       * @param {number} col The column number.
+       */
+      function goToCell(row, col) {
+        google.script.run.activateCell(row, col);
       }
     </script>
   </body>
