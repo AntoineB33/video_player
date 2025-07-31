@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <style>
+      input, button {
+        margin-top: 8px;
+        width: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <label>Find:</label>
+    <input type="text" id="findText">
+    <label>Replace With:</label>
+    <input type="text" id="replaceText">
+    <button onclick="find()">Find All</button>
+    <button onclick="replace()">Replace All</button>
+    <div id="result"></div>
+
+    <script>
+      function find() {
+        const findText = document.getElementById('findText').value.trim();
+        google.script.run.withSuccessHandler(function(matches) {
+          const div = document.getElementById('result');
+          if (matches.length > 0) {
+            div.innerHTML = `Found ${matches.length} match(es).`;
+          } else {
+            div.innerHTML = "No matches found.";
+          }
+        }).findMatches(findText);
+      }
+
+      function replace() {
+        const findText = document.getElementById('findText').value.trim();
+        const replaceText = document.getElementById('replaceText').value.trim();
+        google.script.run.withSuccessHandler(function() {
+          document.getElementById('result').innerHTML = "Replacement complete.";
+        }).replaceMatches(findText, replaceText);
+      }
+    </script>
+  </body>
+</html>
