@@ -348,7 +348,7 @@ def accumulate_dependencies(graph):
         for neighbor in graph[node]:
             if neighbor in prev_neighbors:
                 if prev_neighbors[neighbor][1] == 0 or graph[node][neighbor] == 1:
-                    warnings.append(f"Warning: {neighbor!r} has a redundant dependency {prev_neighbors[neighbor][0]!r} given by {' <- '.join(path[path.index(neighbor):] + [neighbor])}")
+                    warnings.append(f"Warning: {neighbor!r} has a redundant dependency {prev_neighbors[neighbor][0]!r} given by {' <- '.join([str(x) for x in path[path.index(prev_neighbors[neighbor][0]):] + [neighbor]])}")
             neighbors[neighbor] = [node, graph[node][neighbor]]
         new_neighbors = dict(neighbors)
         new_neighbors.update(prev_neighbors)
@@ -383,8 +383,6 @@ def sorter(table_original, errors, warnings):
                 cells[k] = c.strip()
                 if j != path_index:
                     cells[k] = cells[k].lower()
-                if cells[k] != c:
-                    warnings.append(f"Warning: cell \"{c!r}\" in row {i}, column {alph[j]} has been transformed to \"{cells[k]!r}\"")
             row[j] = '; '.join(cells)
     for i, row in enumerate(table[1:]):
         cell = row[path_index]
@@ -403,10 +401,13 @@ def sorter(table_original, errors, warnings):
                         return table_original
                     except ValueError:
                         pass
+                    if "_" in name or ":" in name or "|" in name:
+                        errors.append(f"Error in row {i}, column {alph[j]}: {name!r} contains invalid characters (_ : |)")
                     if name in names:
                         errors.append(f"Error in row {i}, column {alph[j]}: name {name!r} already exists in row {names[name]}")
-                        return table_original
                     names[name] = i
+    if errors:
+        return table_original
     attributes = {}
     for i, row in enumerate(table[1:], start=1):
         for j, cell in enumerate(row):
@@ -475,10 +476,10 @@ def sorter(table_original, errors, warnings):
                 for instr in cell_list:
                     if instr:
                         instr_split = instr.split('.')
-                        if len(instr_split) != len(dep_pattern[j])-1:
+                        if len(instr_split) != len(dep_pattern[j])-1 and len(dep_pattern[j]) > 1:
                             errors.append(f"Error in row {i}, column {alph[j]}: {instr!r} does not match dependencies pattern {dep_pattern[j]!r}")
                             return table_original
-                        if dep_pattern[j]:
+                        if len(dep_pattern[j]) > 1:
                             instr = dep_pattern[j][0] + ''.join([instr_split[i]+dep_pattern[j][i+1] for i in range(len(instr_split))])
                         match = re.match(PATTERN_DISTANCE, instr)
                         intervals = []
@@ -595,6 +596,19 @@ if __name__ == "__main__":
         import pyperclip
         clipboard_content = pyperclip.paste()
         table = [line.split('\t') for line in re.split(r'\r?\n', clipboard_content)]
+        crop_line = len(table)
+        crop_column = len(table[0])
+        for i in range(len(table) - 1, -1, -1):
+            if table[i] != ['']* len(table[0]):
+                crop_line = i + 1
+                break
+        for j in range(len(table[0]) - 1, -1, -1):
+            if any(row[j] for row in table):
+                crop_column = j + 1
+                break
+        table = table[1:crop_line]
+        for i in range(len(table)):
+            table[i] = table[i][1:crop_column]
         warnings = []
         errors = []
         roles = table[0]
