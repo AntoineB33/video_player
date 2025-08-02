@@ -181,136 +181,82 @@ class EfficientConstraintSorter:
                 return None
     
     def _solve_lexicographic_ortools(self, base_model, position, time_limit_seconds):
-        """Solve with lexicographic optimization: first max-min, then max-sum."""
-        
-        # Phase 1: Find the maximum possible minimum distance
-        print("Phase 1: Finding maximum minimum distance...")
-        
-        # Create distance variables
-        distance_vars = []
-        valid_pairs = []
-        for x, y in self.maximize_distance:
-            if x not in self.elements or y not in self.elements:
-                continue
-            valid_pairs.append((x, y))
-        
+        """Solve with lexicographic optimization: maximize distances in sorted order."""
+        print("Starting lexicographic optimization with OR-Tools...")
+
+        # Collect valid pairs
+        valid_pairs = [(x, y) for x, y in self.maximize_distance if x in self.elements and y in self.elements]
+        k = len(valid_pairs)
+
         if not valid_pairs:
-            # No valid pairs, just solve base model
+            # No valid pairs, solve base model
             solver = cp_model.CpSolver()
             solver.parameters.max_time_in_seconds = time_limit_seconds
             status = solver.Solve(base_model)
-            
             if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
                 solution = [''] * self.n
                 for elem in self.elements:
                     pos = solver.Value(position[elem])
                     solution[pos] = elem
                 return solution
-            else:
-                self.last_violations = [f"OR-Tools solver status: {solver.StatusName(status)}"]
-                return None
-        
-        # Binary search for maximum minimum distance
-        low, high = 1, self.n - 1
-        best_min_distance = 0
-        best_solution = None
-        
-        while low <= high:
-            mid = (low + high) // 2
-            
-            # Create model for testing minimum distance = mid
-            test_model = cp_model.CpModel()
-            
-            # Copy all constraints from base model
-            test_position = {}
-            for elem in self.elements:
-                test_position[elem] = test_model.NewIntVar(0, self.n - 1, f'pos_{elem}')
-            
-            # Add all constraints from base model (we need to reconstruct them)
-            test_model.AddAllDifferent([test_position[elem] for elem in self.elements])
-            
-            # Re-add all original constraints
-            self._add_constraints_to_model(test_model, test_position)
-            
-            # Add minimum distance constraint
-            for x, y in valid_pairs:
-                abs_distance = test_model.NewIntVar(0, self.n - 1, f'abs_dist_{x}_{y}')
-                test_model.AddAbsEquality(abs_distance, test_position[x] - test_position[y])
-                test_model.Add(abs_distance >= mid)
-            
-            # Test if this minimum distance is achievable
-            solver = cp_model.CpSolver()
-            solver.parameters.max_time_in_seconds = max(1, time_limit_seconds // 10)  # Use fraction of time
-            
-            status = solver.Solve(test_model)
-            
-            if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
-                best_min_distance = mid
-                # Extract solution
-                solution = [''] * self.n
-                for elem in self.elements:
-                    pos = solver.Value(test_position[elem])
-                    solution[pos] = elem
-                best_solution = solution
-                low = mid + 1
-                print(f"  Minimum distance {mid} is achievable")
-            else:
-                high = mid - 1
-                print(f"  Minimum distance {mid} is not achievable")
-        
-        if best_solution is None:
-            self.last_violations = ["Could not find any solution with distance constraints"]
+            self.last_violations = [f"OR-Tools solver status: {solver.StatusName(status)}"]
             return None
-        
-        print(f"Phase 1 complete: Maximum minimum distance = {best_min_distance}")
-        
-        # Phase 2: Among solutions with optimal minimum distance, maximize sum
-        print("Phase 2: Maximizing sum of distances...")
-        
-        final_model = cp_model.CpModel()
-        final_position = {}
-        for elem in self.elements:
-            final_position[elem] = final_model.NewIntVar(0, self.n - 1, f'pos_{elem}')
-        
-        final_model.AddAllDifferent([final_position[elem] for elem in self.elements])
-        
-        # Re-add all original constraints
-        self._add_constraints_to_model(final_model, final_position)
-        
-        # Add minimum distance constraint (must equal best_min_distance)
-        distance_vars = []
-        for x, y in valid_pairs:
-            abs_distance = final_model.NewIntVar(0, self.n - 1, f'abs_dist_{x}_{y}')
-            final_model.AddAbsEquality(abs_distance, final_position[x] - final_position[y])
-            final_model.Add(abs_distance >= best_min_distance)
-            distance_vars.append(abs_distance)
-        
-        # Maximize sum of distances
-        final_model.Maximize(sum(distance_vars))
-        
-        # Solve final model
+
+        # Create the model
+        model = cp_model.CpModel()
+        model_position = {elem: model.NewIntVar(0, self.n - 1, f'pos_{elem}') for elem in self.elements}
+        model.AddAllDifferent([model_position[elem] for elem in self.elements])
+        self._add_constraints_to_model(model, model_position)
+
+        # Define distance variables
+        dist = {}
+        for i, (x, y) in enumerate(valid_pairs):
+            dist[i] = model.NewIntVar(0, self.n - 1, f'dist_{x}_{y}')
+            model.AddAbsEquality(dist[i], model_position[x] - model_position[y])
+
+        # Define sorted distance variables
+        sorted_dist = [model.NewIntVar(0, self.n - 1, f'sorted_dist_{j}') for j in range(k)]
+        for j in range(k - 1):
+            model.Add(sorted_dist[j] <= sorted_dist[j + 1])
+
+        # Boolean variables to map dist[i] to sorted_dist[j]
+        b = [[model.NewBoolVar(f'b_{i}_{j}') for j in range(k)] for i in range(k)]
+        for i in range(k):
+            model.Add(sum(b[i][j] for j in range(k)) == 1)  # Each dist[i] maps to one sorted_dist[j]
+        for j in range(k):
+            model.Add(sum(b[i][j] for i in range(k)) == 1)  # Each sorted_dist[j] maps to one dist[i]
+        for i in range(k):
+            for j in range(k):
+                model.Add(sorted_dist[j] == dist[i]).OnlyEnforceIf(b[i][j])
+
+        # Sequential maximization
         solver = cp_model.CpSolver()
-        solver.parameters.max_time_in_seconds = max(1, time_limit_seconds - time_limit_seconds // 5)  # Use remaining time
+        solver.parameters.max_time_in_seconds = time_limit_seconds / max(1, k)  # Distribute time
+        optimal_values = []
+
+        for j in range(k):
+            print(f"Maximizing sorted distance {j + 1} of {k}...")
+            model.Maximize(sorted_dist[j])
+            status = solver.Solve(model)
+            if status != cp_model.OPTIMAL and status != cp_model.FEASIBLE:
+                self.last_violations = [f"Failed to maximize sorted_dist[{j}]: {solver.StatusName(status)}"]
+                return None
+            s_j = solver.Value(sorted_dist[j])
+            optimal_values.append(s_j)
+            model.Add(sorted_dist[j] >= s_j)  # Fix this distance for subsequent steps
+            print(f"  sorted_dist[{j}] maximized to {s_j}")
+
+        # Extract final solution
+        solution = [''] * self.n
+        for elem in self.elements:
+            pos = solver.Value(model_position[elem])
+            solution[pos] = elem
+
+        # Report final distances
+        actual_distances = [abs(solution.index(x) - solution.index(y)) for x, y in valid_pairs]
+        print(f"Final distances: {sorted(actual_distances)}")
+        return solution
         
-        status = solver.Solve(final_model)
-        
-        if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
-            solution = [''] * self.n
-            for elem in self.elements:
-                pos = solver.Value(final_position[elem])
-                solution[pos] = elem
-            
-            # Calculate and report final metrics
-            min_dist = min(abs(solution.index(x) - solution.index(y)) for x, y in valid_pairs)
-            sum_dist = sum(abs(solution.index(x) - solution.index(y)) for x, y in valid_pairs)
-            print(f"Phase 2 complete: Minimum distance = {min_dist}, Sum of distances = {sum_dist}")
-            
-            return solution
-        else:
-            # Fallback to Phase 1 solution
-            print("Phase 2 failed, returning Phase 1 solution")
-            return best_solution
-    
     def _add_constraints_to_model(self, model, position):
         """Helper method to add all original constraints to a model."""
         # Add forbidden constraints
@@ -633,7 +579,9 @@ def test_solvers():
     sorter.add_forbidden_constraint("elem_0", "elem_3", [(1, float('inf'))])
     sorter.add_forbidden_constraint("elem_2", "elem_3", [(1, float('inf'))])
     sorter.add_forbidden_constraint("elem_2", "elem_3", [(-float('inf'), -3)])
-    sorter.add_group_maximize({0, 2, 3})
+    sorter.add_forbidden_constraint("elem_5", "elem_6", [(-float('inf'), -2)])
+    sorter.add_forbidden_constraint("elem_5", "elem_6", [(1, float('inf'))])
+    sorter.add_group_maximize({0, 2, 3, 5, 6})
     
     print("Testing OR-Tools solver...")
     start_time = time.time()
