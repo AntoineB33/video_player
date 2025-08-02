@@ -29,9 +29,9 @@ class EfficientConstraintSorter:
         names = [self.elements[i] for i in index_set]
         for u, v in itertools.combinations(names, 2):
             self.add_maximize_distance_constraint(u, v)
-
+    
     def solve_with_ortools(self, time_limit_seconds: int = 300) -> Optional[List[str]]:
-        """Solve using Google OR-Tools CP-SAT solver."""
+        """Solve using Google OR-Tools CP-SAT solver with lexicographic optimization."""
         model = cp_model.CpModel()
         
         # Decision variables: position[i] represents the position of element i
@@ -159,41 +159,244 @@ class EfficientConstraintSorter:
             if satisfied_with_y:
                 model.AddBoolOr(satisfied_with_y)
         
-        # Objective: maximize distances for maximize_distance constraints
+        # Lexicographic optimization: first maximize minimum distance, then maximize sum
         if self.maximize_distance:
-            distance_vars = []
-            for x, y in self.maximize_distance:
-                if x not in self.elements or y not in self.elements:
-                    continue
-                
-                # Create variable for absolute distance
-                abs_distance = model.NewIntVar(0, self.n - 1, f'abs_dist_{x}_{y}')
-                distance_vars.append(abs_distance)
-                
-                # abs_distance = |pos[x] - pos[y]|
-                model.AddAbsEquality(abs_distance, position[x] - position[y])
+            return self._solve_lexicographic_ortools(model, position, time_limit_seconds)
+        else:
+            # No distance constraints, just solve
+            solver = cp_model.CpSolver()
+            solver.parameters.max_time_in_seconds = time_limit_seconds
             
-            if distance_vars:
-                model.Maximize(sum(distance_vars))
+            status = solver.Solve(model)
+            
+            if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
+                # Extract solution
+                solution = [''] * self.n
+                for elem in self.elements:
+                    pos = solver.Value(position[elem])
+                    solution[pos] = elem
+                return solution
+            else:
+                self.last_violations = [f"OR-Tools solver status: {solver.StatusName(status)}"]
+                return None
+    
+    def _solve_lexicographic_ortools(self, base_model, position, time_limit_seconds):
+        """Solve with lexicographic optimization: first max-min, then max-sum."""
         
-        # Solve
+        # Phase 1: Find the maximum possible minimum distance
+        print("Phase 1: Finding maximum minimum distance...")
+        
+        # Create distance variables
+        distance_vars = []
+        valid_pairs = []
+        for x, y in self.maximize_distance:
+            if x not in self.elements or y not in self.elements:
+                continue
+            valid_pairs.append((x, y))
+        
+        if not valid_pairs:
+            # No valid pairs, just solve base model
+            solver = cp_model.CpSolver()
+            solver.parameters.max_time_in_seconds = time_limit_seconds
+            status = solver.Solve(base_model)
+            
+            if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
+                solution = [''] * self.n
+                for elem in self.elements:
+                    pos = solver.Value(position[elem])
+                    solution[pos] = elem
+                return solution
+            else:
+                self.last_violations = [f"OR-Tools solver status: {solver.StatusName(status)}"]
+                return None
+        
+        # Binary search for maximum minimum distance
+        low, high = 1, self.n - 1
+        best_min_distance = 0
+        best_solution = None
+        
+        while low <= high:
+            mid = (low + high) // 2
+            
+            # Create model for testing minimum distance = mid
+            test_model = cp_model.CpModel()
+            
+            # Copy all constraints from base model
+            test_position = {}
+            for elem in self.elements:
+                test_position[elem] = test_model.NewIntVar(0, self.n - 1, f'pos_{elem}')
+            
+            # Add all constraints from base model (we need to reconstruct them)
+            test_model.AddAllDifferent([test_position[elem] for elem in self.elements])
+            
+            # Re-add all original constraints
+            self._add_constraints_to_model(test_model, test_position)
+            
+            # Add minimum distance constraint
+            for x, y in valid_pairs:
+                abs_distance = test_model.NewIntVar(0, self.n - 1, f'abs_dist_{x}_{y}')
+                test_model.AddAbsEquality(abs_distance, test_position[x] - test_position[y])
+                test_model.Add(abs_distance >= mid)
+            
+            # Test if this minimum distance is achievable
+            solver = cp_model.CpSolver()
+            solver.parameters.max_time_in_seconds = max(1, time_limit_seconds // 10)  # Use fraction of time
+            
+            status = solver.Solve(test_model)
+            
+            if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
+                best_min_distance = mid
+                # Extract solution
+                solution = [''] * self.n
+                for elem in self.elements:
+                    pos = solver.Value(test_position[elem])
+                    solution[pos] = elem
+                best_solution = solution
+                low = mid + 1
+                print(f"  Minimum distance {mid} is achievable")
+            else:
+                high = mid - 1
+                print(f"  Minimum distance {mid} is not achievable")
+        
+        if best_solution is None:
+            self.last_violations = ["Could not find any solution with distance constraints"]
+            return None
+        
+        print(f"Phase 1 complete: Maximum minimum distance = {best_min_distance}")
+        
+        # Phase 2: Among solutions with optimal minimum distance, maximize sum
+        print("Phase 2: Maximizing sum of distances...")
+        
+        final_model = cp_model.CpModel()
+        final_position = {}
+        for elem in self.elements:
+            final_position[elem] = final_model.NewIntVar(0, self.n - 1, f'pos_{elem}')
+        
+        final_model.AddAllDifferent([final_position[elem] for elem in self.elements])
+        
+        # Re-add all original constraints
+        self._add_constraints_to_model(final_model, final_position)
+        
+        # Add minimum distance constraint (must equal best_min_distance)
+        distance_vars = []
+        for x, y in valid_pairs:
+            abs_distance = final_model.NewIntVar(0, self.n - 1, f'abs_dist_{x}_{y}')
+            final_model.AddAbsEquality(abs_distance, final_position[x] - final_position[y])
+            final_model.Add(abs_distance >= best_min_distance)
+            distance_vars.append(abs_distance)
+        
+        # Maximize sum of distances
+        final_model.Maximize(sum(distance_vars))
+        
+        # Solve final model
         solver = cp_model.CpSolver()
-        solver.parameters.max_time_in_seconds = time_limit_seconds
+        solver.parameters.max_time_in_seconds = max(1, time_limit_seconds - time_limit_seconds // 5)  # Use remaining time
         
-        status = solver.Solve(model)
+        status = solver.Solve(final_model)
         
         if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
-            # Extract solution
             solution = [''] * self.n
             for elem in self.elements:
-                pos = solver.Value(position[elem])
+                pos = solver.Value(final_position[elem])
                 solution[pos] = elem
+            
+            # Calculate and report final metrics
+            min_dist = min(abs(solution.index(x) - solution.index(y)) for x, y in valid_pairs)
+            sum_dist = sum(abs(solution.index(x) - solution.index(y)) for x, y in valid_pairs)
+            print(f"Phase 2 complete: Minimum distance = {min_dist}, Sum of distances = {sum_dist}")
+            
             return solution
         else:
-            self.last_violations = [f"OR-Tools solver status: {solver.StatusName(status)}"]
-            return None
+            # Fallback to Phase 1 solution
+            print("Phase 2 failed, returning Phase 1 solution")
+            return best_solution
+    
+    def _add_constraints_to_model(self, model, position):
+        """Helper method to add all original constraints to a model."""
+        # Add forbidden constraints
+        for x, y, intervals in self.forbidden_constraints:
+            if x not in self.elements or y not in self.elements:
+                continue
+            
+            for start, end in intervals:
+                if start == float('-inf') and end == float('inf'):
+                    continue
+                elif start == float('-inf'):
+                    if end == float('inf'):
+                        continue
+                    end_int = int(end)
+                    model.Add(position[x] - position[y] > end_int)
+                elif end == float('inf'):
+                    if start == float('-inf'):
+                        continue
+                    start_int = int(start)
+                    model.Add(position[x] - position[y] < start_int)
+                else:
+                    start_int, end_int = int(start), int(end)
+                    is_less = model.NewBoolVar(f'less_{x}_{y}_{start_int}_{end_int}')
+                    is_greater = model.NewBoolVar(f'greater_{x}_{y}_{start_int}_{end_int}')
+                    model.AddBoolOr([is_less, is_greater])
+                    model.Add(position[x] - position[y] < start_int).OnlyEnforceIf(is_less)
+                    model.Add(position[x] - position[y] > end_int).OnlyEnforceIf(is_greater)
+        
+        # Add required disjunctive constraints
+        for x, y_list, intervals in self.required_disjunctive_constraints:
+            if x not in self.elements:
+                continue
+            
+            valid_y_list = [y for y in y_list if y in self.elements]
+            if not valid_y_list:
+                continue
+            
+            satisfied_with_y = []
+            
+            for y in valid_y_list:
+                y_satisfied = model.NewBoolVar(f'satisfied_{x}_{y}')
+                satisfied_with_y.append(y_satisfied)
+                
+                interval_violations = []
+                
+                for start, end in intervals:
+                    if start == float('-inf') and end == float('inf'):
+                        always_violated = model.NewBoolVar(f'always_violated_{x}_{y}')
+                        model.Add(always_violated == 1)
+                        interval_violations.append(always_violated)
+                    elif start == float('-inf'):
+                        if end == float('inf'):
+                            continue
+                        end_int = int(end)
+                        in_interval = model.NewBoolVar(f'in_neg_inf_interval_{x}_{y}_{end_int}')
+                        interval_violations.append(in_interval)
+                        model.Add(position[x] - position[y] <= end_int).OnlyEnforceIf(in_interval)
+                        model.Add(position[x] - position[y] > end_int).OnlyEnforceIf(in_interval.Not())
+                    elif end == float('inf'):
+                        if start == float('-inf'):
+                            continue
+                        start_int = int(start)
+                        in_interval = model.NewBoolVar(f'in_pos_inf_interval_{x}_{y}_{start_int}')
+                        interval_violations.append(in_interval)
+                        model.Add(position[x] - position[y] >= start_int).OnlyEnforceIf(in_interval)
+                        model.Add(position[x] - position[y] < start_int).OnlyEnforceIf(in_interval.Not())
+                    else:
+                        start_int, end_int = int(start), int(end)
+                        in_interval = model.NewBoolVar(f'in_interval_{x}_{y}_{start_int}_{end_int}')
+                        interval_violations.append(in_interval)
+                        model.Add(position[x] - position[y] >= start_int).OnlyEnforceIf(in_interval)
+                        model.Add(position[x] - position[y] <= end_int).OnlyEnforceIf(in_interval)
+                        model.Add(position[x] - position[y] < start_int).OnlyEnforceIf(in_interval.Not())
+                        model.Add(position[x] - position[y] > end_int).OnlyEnforceIf(in_interval.Not())
+                
+                if interval_violations:
+                    model.AddBoolAnd([iv.Not() for iv in interval_violations]).OnlyEnforceIf(y_satisfied)
+                    model.AddBoolOr(interval_violations).OnlyEnforceIf(y_satisfied.Not())
+                else:
+                    model.Add(y_satisfied == 1)
+            
+            if satisfied_with_y:
+                model.AddBoolOr(satisfied_with_y)
+
     def solve_with_z3(self, time_limit_ms: int = 300000) -> Optional[List[str]]:
-        """Solve using Z3 SMT solver."""
+        """Solve using Z3 SMT solver with lexicographic optimization."""
         # Create Z3 variables
         position = {}
         for elem in self.elements:
@@ -266,76 +469,145 @@ class EfficientConstraintSorter:
             if satisfied_conditions:
                 solver.add(Or(satisfied_conditions))
         
-        # Check satisfiability
-        if solver.check() == sat:
+        # Check satisfiability first
+        if solver.check() != sat:
+            self.last_violations = ["Z3 solver could not find a satisfiable solution"]
+            return None
+        
+        # If we have distance maximization constraints, use lexicographic optimization
+        if self.maximize_distance:
+            return self._solve_lexicographic_z3(position, solver, time_limit_ms)
+        else:
+            # No distance constraints, return current solution
             model = solver.model()
-            
-            # Extract solution
             solution = [''] * self.n
             for elem in self.elements:
                 pos = model[position[elem]].as_long()
                 solution[pos] = elem
-            
-            # If we have distance maximization constraints, try to optimize
-            if self.maximize_distance:
-                return self._optimize_z3_solution(solution, position, solver)
-            
             return solution
-        else:
-            self.last_violations = ["Z3 solver could not find a satisfiable solution"]
-            return None
     
-    def _optimize_z3_solution(self, initial_solution: List[str], position: Dict, base_solver: Solver) -> List[str]:
-        """Optimize Z3 solution for distance maximization using iterative improvement."""
-        current_solution = initial_solution.copy()
+    def _solve_lexicographic_z3(self, position, base_solver, time_limit_ms):
+        """Solve with lexicographic optimization using Z3."""
+        valid_pairs = [(x, y) for x, y in self.maximize_distance 
+                      if x in self.elements and y in self.elements]
         
-        def calculate_total_distance(solution: List[str]) -> int:
-            pos_map = {elem: i for i, elem in enumerate(solution)}
-            total = 0
-            for x, y in self.maximize_distance:
-                if x in pos_map and y in pos_map:
-                    total += abs(pos_map[x] - pos_map[y])
-            return total
+        if not valid_pairs:
+            # No valid pairs, return base solution
+            model = base_solver.model()
+            solution = [''] * self.n
+            for elem in self.elements:
+                pos = model[position[elem]].as_long()
+                solution[pos] = elem
+            return solution
         
-        current_distance = calculate_total_distance(current_solution)
+        print("Z3 Phase 1: Finding maximum minimum distance...")
         
-        # Try to improve by adding distance constraints iteratively
-        for target_distance in range(current_distance + 1, current_distance + 100):
-            optimizer = Solver()
-            optimizer.set("timeout", 10000)  # 10 second timeout for each optimization attempt
+        # Binary search for maximum minimum distance
+        low, high = 1, self.n - 1
+        best_min_distance = 0
+        best_solution = None
+        
+        while low <= high:
+            mid = (low + high) // 2
             
-            # Copy all constraints from base solver
+            # Create test solver
+            test_solver = Solver()
+            test_solver.set("timeout", max(1000, time_limit_ms // 20))  # Use fraction of time
+            
+            # Add all base constraints
             for constraint in base_solver.assertions():
-                optimizer.add(constraint)
+                test_solver.add(constraint)
             
-            # Add distance optimization constraint
-            distance_sum = 0
-            for x, y in self.maximize_distance:
-                if x in self.elements and y in self.elements:
-                    # Use absolute value approximation
-                    abs_var = Int(f'abs_{x}_{y}')
-                    optimizer.add(abs_var >= position[x] - position[y])
-                    optimizer.add(abs_var >= position[y] - position[x])
-                    distance_sum += abs_var
+            # Add minimum distance constraints
+            for x, y in valid_pairs:
+                test_solver.add(Or(
+                    position[x] - position[y] >= mid,
+                    position[y] - position[x] >= mid
+                ))
             
-            optimizer.add(distance_sum >= target_distance)
+            if test_solver.check() == sat:
+                best_min_distance = mid
+                model = test_solver.model()
+                solution = [''] * self.n
+                for elem in self.elements:
+                    pos = model[position[elem]].as_long()
+                    solution[pos] = elem
+                best_solution = solution
+                low = mid + 1
+                print(f"  Z3: Minimum distance {mid} is achievable")
+            else:
+                high = mid - 1
+                print(f"  Z3: Minimum distance {mid} is not achievable")
+        
+        if best_solution is None:
+            self.last_violations = ["Z3 could not find any solution with distance constraints"]
+            return None
+        
+        print(f"Z3 Phase 1 complete: Maximum minimum distance = {best_min_distance}")
+        print("Z3 Phase 2: Maximizing sum of distances...")
+        
+        # Phase 2: Optimize sum while maintaining minimum distance
+        # For Z3, we'll use iterative improvement since it doesn't have built-in optimization
+        current_solution = best_solution
+        current_sum = sum(abs(current_solution.index(x) - current_solution.index(y)) 
+                         for x, y in valid_pairs)
+        
+        # Try to find better solutions by increasing the target sum
+        for target_sum in range(current_sum + 1, current_sum + 50):  # Limited search
+            opt_solver = Solver()
+            opt_solver.set("timeout", max(1000, time_limit_ms // 10))
             
-            if optimizer.check() == sat:
-                model = optimizer.model()
+            # Add base constraints
+            for constraint in base_solver.assertions():
+                opt_solver.add(constraint)
+            
+            # Add minimum distance constraint
+            for x, y in valid_pairs:
+                opt_solver.add(Or(
+                    position[x] - position[y] >= best_min_distance,
+                    position[y] - position[x] >= best_min_distance
+                ))
+            
+            # Add sum constraint (approximation)
+            sum_expr = 0
+            for x, y in valid_pairs:
+                # Approximate absolute value with two variables
+                diff_pos = Int(f'diff_pos_{x}_{y}')
+                diff_neg = Int(f'diff_neg_{x}_{y}')
+                
+                opt_solver.add(diff_pos >= 0)
+                opt_solver.add(diff_neg >= 0)
+                opt_solver.add(diff_pos >= position[x] - position[y])
+                opt_solver.add(diff_neg >= position[y] - position[x])
+                opt_solver.add(Or(diff_pos == 0, diff_neg == 0))
+                
+                sum_expr += diff_pos + diff_neg
+            
+            opt_solver.add(sum_expr >= target_sum)
+            
+            if opt_solver.check() == sat:
+                model = opt_solver.model()
                 solution = [''] * self.n
                 for elem in self.elements:
                     pos = model[position[elem]].as_long()
                     solution[pos] = elem
                 current_solution = solution
-                current_distance = target_distance
+                current_sum = target_sum
             else:
                 break  # No better solution found
         
+        # Calculate final metrics
+        min_dist = min(abs(current_solution.index(x) - current_solution.index(y)) 
+                      for x, y in valid_pairs)
+        sum_dist = sum(abs(current_solution.index(x) - current_solution.index(y)) 
+                      for x, y in valid_pairs)
+        print(f"Z3 Phase 2 complete: Minimum distance = {min_dist}, Sum of distances = {sum_dist}")
+        
         return current_solution
-
+    
     def solve(self, method: str = "ortools", time_limit: int = 300) -> Optional[List[str]]:
         """
-        Solve the constraint satisfaction problem.
+        Solve the constraint satisfaction problem with lexicographic optimization.
         
         Args:
             method: "ortools" or "z3"
@@ -349,7 +621,7 @@ class EfficientConstraintSorter:
             return self.solve_with_z3(time_limit * 1000)  # Convert to milliseconds
         else:
             raise ValueError("Method must be 'ortools' or 'z3'")
-
+        
 # Example usage and testing
 def test_solvers():
     """Test both solvers with a sample problem."""
@@ -358,10 +630,10 @@ def test_solvers():
     sorter = EfficientConstraintSorter(elements)
     
     # Add some test constraints
-    sorter.add_forbidden_constraint("elem_0", "elem_1", [(-2, 2)])
+    sorter.add_forbidden_constraint("elem_0", "elem_3", [(1, float('inf'))])
     sorter.add_forbidden_constraint("elem_2", "elem_3", [(1, float('inf'))])
-    sorter.add_forbidden_constraint("elem_2", "elem_3", [(-float('inf'), -1)])
-    sorter.add_maximize_distance_constraint("elem_0", "elem_19")
+    sorter.add_forbidden_constraint("elem_2", "elem_3", [(-float('inf'), -3)])
+    sorter.add_group_maximize({0, 2, 3})
     
     print("Testing OR-Tools solver...")
     start_time = time.time()
