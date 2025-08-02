@@ -1,3 +1,5 @@
 cryptography==45.0.5
+ortools==9.12.4544
 pyperclip==1.9.0
 python_vlc==3.0.21203
+z3-solver

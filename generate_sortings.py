@@ -3,6 +3,8 @@ import random
 from typing import List, Tuple, Set, Optional, Dict
 import itertools
 import string
+from ortools.sat.python import cp_model
+from z3 import *
 from config import PLAYLISTS_PATH
 
 ROLES = ['path', 'names', 'attributes', 'dependencies', 'sprawl']
@@ -32,7 +34,8 @@ class instr_struct:
             tuple(sorted(self.intervals))
         ))
 
-class ConstraintSorter:
+
+class EfficientConstraintSorter:
     def __init__(self, elements: List[str]):
         self.elements = elements
         self.n = len(elements)
@@ -40,167 +43,343 @@ class ConstraintSorter:
         self.required_disjunctive_constraints: List[Tuple[str, List[str], List[Tuple[float, float]]]] = []
         self.maximize_distance: List[Tuple[str, str]] = []
         self.last_violations: Optional[List[str]] = None
-
+        
     def add_forbidden_constraint(self, x: str, y: str, intervals: List[Tuple[int, int]]):
-        """
-        Add a constraint that element x cannot be placed in specified intervals around element y.
-        Intervals are relative positions: [-10,-6] means x cannot be 10 to 6 positions before y.
-        Use float('inf') for 'end of list' in intervals.
-        """
+        """Add a constraint that element x cannot be placed in specified intervals around element y."""
         self.forbidden_constraints.append((x, y, [(float(s), float(e)) for s, e in intervals]))
-
+    
     def add_forbidden_constraint_any_y(self, x: str, y_list: List[str], intervals: List[Tuple[int, int]]):
-        """
-        Adds a constraint that x's relative position to AT LEAST ONE element in y_list
-        must fall OUTSIDE the specified forbidden intervals.
-        """
+        """Adds a constraint that x's relative position to AT LEAST ONE element in y_list
+        must fall OUTSIDE the specified forbidden intervals."""
         self.required_disjunctive_constraints.append((x, y_list, [(float(s), float(e)) for s, e in intervals]))
-
+    
     def add_maximize_distance_constraint(self, x: str, y: str):
         self.maximize_distance.append((x, y))
-
+    
     def add_group_maximize(self, index_set: Set[int]):
         names = [self.elements[i] for i in index_set]
         for u, v in itertools.combinations(names, 2):
             self.add_maximize_distance_constraint(u, v)
 
-    def is_valid_placement(self, arrangement: List[Optional[str]]) -> bool:
-        """Check if a partial or full arrangement satisfies all hard constraints."""
-        pos: Dict[str, int] = {elem: i for i, elem in enumerate(arrangement) if elem is not None}
-
-        # 1. Check standard forbidden constraints
+    def solve_with_ortools(self, time_limit_seconds: int = 300) -> Optional[List[str]]:
+        """Solve using Google OR-Tools CP-SAT solver."""
+        model = cp_model.CpModel()
+        
+        # Decision variables: position[i] represents the position of element i
+        position = {}
+        for i, elem in enumerate(self.elements):
+            position[elem] = model.NewIntVar(0, self.n - 1, f'pos_{elem}')
+        
+        # All elements must be at different positions (permutation constraint)
+        model.AddAllDifferent([position[elem] for elem in self.elements])
+        
+        # Add forbidden constraints
         for x, y, intervals in self.forbidden_constraints:
-            if x not in pos or y not in pos:
+            if x not in self.elements or y not in self.elements:
                 continue
-            relative_pos = pos[x] - pos[y]
-            for start, end in intervals:
-                if start <= relative_pos <= end:
-                    return False
-
-        # 2. Check required disjunctive constraints
-        for x, y_list, intervals in self.required_disjunctive_constraints:
-            if x not in pos:
-                continue
-
-            # This constraint is only active if at least one 'y' is also placed.
-            placed_ys = [y_elem for y_elem in y_list if y_elem in pos]
-            if not placed_ys:
-                continue
-
-            is_satisfied_for_x = False
-            for y in placed_ys:
-                relative_pos = pos[x] - pos[y]
-                is_in_forbidden_zone = any(start <= relative_pos <= end for start, end in intervals)
-                
-                if not is_in_forbidden_zone:
-                    is_satisfied_for_x = True
-                    break
             
-            if not is_satisfied_for_x:
-                return False
+            # For each forbidden interval, create constraint: NOT (start <= pos[x] - pos[y] <= end)
+            for start, end in intervals:
+                # Handle infinite intervals
+                if start == float('-inf') and end == float('inf'):
+                    # This interval covers everything, so the constraint is unsatisfiable
+                    # We can't forbid all relative positions
+                    continue
+                elif start == float('-inf'):
+                    # Interval is (-inf, end], so we need pos[x] - pos[y] > end
+                    if end == float('inf'):
+                        continue  # This would be (-inf, inf) which we already handled
+                    end_int = int(end)
+                    model.Add(position[x] - position[y] > end_int)
+                elif end == float('inf'):
+                    # Interval is [start, inf), so we need pos[x] - pos[y] < start
+                    if start == float('-inf'):
+                        continue  # This would be (-inf, inf) which we already handled
+                    start_int = int(start)
+                    model.Add(position[x] - position[y] < start_int)
+                else:
+                    # Finite interval [start, end]
+                    start_int, end_int = int(start), int(end)
+                    
+                    # pos[x] - pos[y] should NOT be in [start_int, end_int]
+                    # This means: pos[x] - pos[y] < start_int OR pos[x] - pos[y] > end_int
+                    
+                    # Create boolean variables for the disjunction
+                    is_less = model.NewBoolVar(f'less_{x}_{y}_{start_int}_{end_int}')
+                    is_greater = model.NewBoolVar(f'greater_{x}_{y}_{start_int}_{end_int}')
+                    
+                    # At least one must be true
+                    model.AddBoolOr([is_less, is_greater])
+                    
+                    # If is_less is true, then pos[x] - pos[y] < start_int
+                    model.Add(position[x] - position[y] < start_int).OnlyEnforceIf(is_less)
+                    
+                    # If is_greater is true, then pos[x] - pos[y] > end_int
+                    model.Add(position[x] - position[y] > end_int).OnlyEnforceIf(is_greater)
+        
+        # Add required disjunctive constraints
+        for x, y_list, intervals in self.required_disjunctive_constraints:
+            if x not in self.elements:
+                continue
+            
+            valid_y_list = [y for y in y_list if y in self.elements]
+            if not valid_y_list:
+                continue
+            
+            # For each y in y_list, create boolean indicating if constraint is satisfied with that y
+            satisfied_with_y = []
+            
+            for y in valid_y_list:
+                y_satisfied = model.NewBoolVar(f'satisfied_{x}_{y}')
+                satisfied_with_y.append(y_satisfied)
+                
+                # y_satisfied is true if x is NOT in forbidden intervals relative to y
+                interval_violations = []
+                
+                for start, end in intervals:
+                    # Handle infinite intervals in disjunctive constraints
+                    if start == float('-inf') and end == float('inf'):
+                        # This interval covers everything, so it's always violated
+                        # Create a boolean that's always true
+                        always_violated = model.NewBoolVar(f'always_violated_{x}_{y}')
+                        model.Add(always_violated == 1)
+                        interval_violations.append(always_violated)
+                    elif start == float('-inf'):
+                        if end == float('inf'):
+                            continue  # Already handled above
+                        end_int = int(end)
+                        # Violated if pos[x] - pos[y] <= end_int
+                        in_interval = model.NewBoolVar(f'in_neg_inf_interval_{x}_{y}_{end_int}')
+                        interval_violations.append(in_interval)
+                        
+                        model.Add(position[x] - position[y] <= end_int).OnlyEnforceIf(in_interval)
+                        model.Add(position[x] - position[y] > end_int).OnlyEnforceIf(in_interval.Not())
+                    elif end == float('inf'):
+                        if start == float('-inf'):
+                            continue  # Already handled above
+                        start_int = int(start)
+                        # Violated if pos[x] - pos[y] >= start_int
+                        in_interval = model.NewBoolVar(f'in_pos_inf_interval_{x}_{y}_{start_int}')
+                        interval_violations.append(in_interval)
+                        
+                        model.Add(position[x] - position[y] >= start_int).OnlyEnforceIf(in_interval)
+                        model.Add(position[x] - position[y] < start_int).OnlyEnforceIf(in_interval.Not())
+                    else:
+                        # Finite interval
+                        start_int, end_int = int(start), int(end)
+                        
+                        # Create boolean for whether x is in this forbidden interval relative to y
+                        in_interval = model.NewBoolVar(f'in_interval_{x}_{y}_{start_int}_{end_int}')
+                        interval_violations.append(in_interval)
+                        
+                        # in_interval is true iff start_int <= pos[x] - pos[y] <= end_int
+                        model.Add(position[x] - position[y] >= start_int).OnlyEnforceIf(in_interval)
+                        model.Add(position[x] - position[y] <= end_int).OnlyEnforceIf(in_interval)
+                        model.Add(position[x] - position[y] < start_int).OnlyEnforceIf(in_interval.Not())
+                        model.Add(position[x] - position[y] > end_int).OnlyEnforceIf(in_interval.Not())
+                
+                # y_satisfied is true iff none of the intervals are violated
+                if interval_violations:
+                    model.AddBoolAnd([iv.Not() for iv in interval_violations]).OnlyEnforceIf(y_satisfied)
+                    model.AddBoolOr(interval_violations).OnlyEnforceIf(y_satisfied.Not())
+                else:
+                    # No intervals to violate, so always satisfied
+                    model.Add(y_satisfied == 1)
+            
+            # At least one y must satisfy the constraint
+            if satisfied_with_y:
+                model.AddBoolOr(satisfied_with_y)
+        
+        # Objective: maximize distances for maximize_distance constraints
+        if self.maximize_distance:
+            distance_vars = []
+            for x, y in self.maximize_distance:
+                if x not in self.elements or y not in self.elements:
+                    continue
+                
+                # Create variable for absolute distance
+                abs_distance = model.NewIntVar(0, self.n - 1, f'abs_dist_{x}_{y}')
+                distance_vars.append(abs_distance)
+                
+                # abs_distance = |pos[x] - pos[y]|
+                model.AddAbsEquality(abs_distance, position[x] - position[y])
+            
+            if distance_vars:
+                model.Maximize(sum(distance_vars))
+        
+        # Solve
+        solver = cp_model.CpSolver()
+        solver.parameters.max_time_in_seconds = time_limit_seconds
+        
+        status = solver.Solve(model)
+        
+        if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
+            # Extract solution
+            solution = [''] * self.n
+            for elem in self.elements:
+                pos = solver.Value(position[elem])
+                solution[pos] = elem
+            return solution
+        else:
+            self.last_violations = [f"OR-Tools solver status: {solver.StatusName(status)}"]
+            return None
+    def solve_with_z3(self, time_limit_ms: int = 300000) -> Optional[List[str]]:
+        """Solve using Z3 SMT solver."""
+        # Create Z3 variables
+        position = {}
+        for elem in self.elements:
+            position[elem] = Int(f'pos_{elem}')
+        
+        # Create solver
+        solver = Solver()
+        solver.set("timeout", time_limit_ms)
+        
+        # Domain constraints: all positions are in [0, n-1]
+        for elem in self.elements:
+            solver.add(And(position[elem] >= 0, position[elem] < self.n))
+        
+        # All different constraint (permutation)
+        solver.add(Distinct([position[elem] for elem in self.elements]))
+        
+        # Add forbidden constraints
+        for x, y, intervals in self.forbidden_constraints:
+            if x not in self.elements or y not in self.elements:
+                continue
+            
+            for start, end in intervals:
+                if start == float('inf') or end == float('inf'):
+                    continue
+                
+                start_int, end_int = int(start), int(end)
+                
+                # NOT (start_int <= pos[x] - pos[y] <= end_int)
+                # Equivalent to: pos[x] - pos[y] < start_int OR pos[x] - pos[y] > end_int
+                solver.add(Or(
+                    position[x] - position[y] < start_int,
+                    position[x] - position[y] > end_int
+                ))
+        
+        # Add required disjunctive constraints
+        for x, y_list, intervals in self.required_disjunctive_constraints:
+            if x not in self.elements:
+                continue
+            
+            valid_y_list = [y for y in y_list if y in self.elements]
+            if not valid_y_list:
+                continue
+            
+            # For each y in y_list, check if constraint is satisfied
+            satisfied_conditions = []
+            
+            for y in valid_y_list:
+                # x satisfies constraint with y if it's outside all forbidden intervals
+                outside_all_intervals = []
+                
+                for start, end in intervals:
+                    if start == float('inf') or end == float('inf'):
+                        continue
+                    
+                    start_int, end_int = int(start), int(end)
+                    
+                    # Outside this interval: pos[x] - pos[y] < start_int OR pos[x] - pos[y] > end_int
+                    outside_interval = Or(
+                        position[x] - position[y] < start_int,
+                        position[x] - position[y] > end_int
+                    )
+                    outside_all_intervals.append(outside_interval)
+                
+                if outside_all_intervals:
+                    # Satisfied with y if outside ALL intervals
+                    satisfied_with_y = And(outside_all_intervals)
+                    satisfied_conditions.append(satisfied_with_y)
+            
+            # At least one y must satisfy the constraint
+            if satisfied_conditions:
+                solver.add(Or(satisfied_conditions))
+        
+        # Check satisfiability
+        if solver.check() == sat:
+            model = solver.model()
+            
+            # Extract solution
+            solution = [''] * self.n
+            for elem in self.elements:
+                pos = model[position[elem]].as_long()
+                solution[pos] = elem
+            
+            # If we have distance maximization constraints, try to optimize
+            if self.maximize_distance:
+                return self._optimize_z3_solution(solution, position, solver)
+            
+            return solution
+        else:
+            self.last_violations = ["Z3 solver could not find a satisfiable solution"]
+            return None
+    
+    def _optimize_z3_solution(self, initial_solution: List[str], position: Dict, base_solver: Solver) -> List[str]:
+        """Optimize Z3 solution for distance maximization using iterative improvement."""
+        current_solution = initial_solution.copy()
+        
+        def calculate_total_distance(solution: List[str]) -> int:
+            pos_map = {elem: i for i, elem in enumerate(solution)}
+            total = 0
+            for x, y in self.maximize_distance:
+                if x in pos_map and y in pos_map:
+                    total += abs(pos_map[x] - pos_map[y])
+            return total
+        
+        current_distance = calculate_total_distance(current_solution)
+        
+        # Try to improve by adding distance constraints iteratively
+        for target_distance in range(current_distance + 1, current_distance + 100):
+            optimizer = Solver()
+            optimizer.set("timeout", 10000)  # 10 second timeout for each optimization attempt
+            
+            # Copy all constraints from base solver
+            for constraint in base_solver.assertions():
+                optimizer.add(constraint)
+            
+            # Add distance optimization constraint
+            distance_sum = 0
+            for x, y in self.maximize_distance:
+                if x in self.elements and y in self.elements:
+                    # Use absolute value approximation
+                    abs_var = Int(f'abs_{x}_{y}')
+                    optimizer.add(abs_var >= position[x] - position[y])
+                    optimizer.add(abs_var >= position[y] - position[x])
+                    distance_sum += abs_var
+            
+            optimizer.add(distance_sum >= target_distance)
+            
+            if optimizer.check() == sat:
+                model = optimizer.model()
+                solution = [''] * self.n
+                for elem in self.elements:
+                    pos = model[position[elem]].as_long()
+                    solution[pos] = elem
+                current_solution = solution
+                current_distance = target_distance
+            else:
+                break  # No better solution found
+        
+        return current_solution
 
-        return True
-
-    def calculate_distance_score(self, arrangement: List[str]) -> float:
-        """Calculate score based on distance maximization constraints (higher is better)."""
-        pos = {elem: i for i, elem in enumerate(arrangement)}
-        total_distance = 0
-        for x, y in self.maximize_distance:
-            if x in pos and y in pos:
-                total_distance += abs(pos[x] - pos[y])
-        return total_distance
-
-    def local_search_optimization(self, initial_arrangement: List[str], max_iterations: int = 2000) -> List[str]:
-        """Improve arrangement using local search while maintaining constraint satisfaction."""
-        current = initial_arrangement.copy()
-        current_score = self.calculate_distance_score(current)
-
-        for _ in range(max_iterations):
-            i, j = random.sample(range(self.n), 2)
-            new_arrangement = current.copy()
-            new_arrangement[i], new_arrangement[j] = new_arrangement[j], new_arrangement[i]
-
-            if self.is_valid_placement(new_arrangement):
-                new_score = self.calculate_distance_score(new_arrangement)
-                if new_score > current_score:
-                    current = new_arrangement
-                    current_score = new_score
-        return current
-
-    # Replace your old solve() method with this new one
-    def solve(self, max_iterations: int = 2000) -> Optional[List[str]]:
+    def solve(self, method: str = "ortools", time_limit: int = 300) -> Optional[List[str]]:
         """
-        Finds a valid arrangement using backtracking, then optimizes it for distance.
-        Returns the best arrangement found, or None if no valid arrangement exists.
+        Solve the constraint satisfaction problem.
+        
+        Args:
+            method: "ortools" or "z3"
+            time_limit: Time limit in seconds for OR-Tools, milliseconds for Z3
         """
         self.last_violations = []
         
-        # Find a single valid arrangement using a systematic backtracking search
-        valid_arrangement = self._solve_backtracking()
-
-        if valid_arrangement is None:
-            self.last_violations = ["No valid arrangement could be found by the backtracking solver."]
-            return None
-
-        # If a valid solution is found, optimize it for the distance score
-        if self.maximize_distance:
-            optimized_arrangement = self.local_search_optimization(valid_arrangement, max_iterations)
-            return optimized_arrangement
-        
-        return valid_arrangement
-
-    # Add this new private helper method for the backtracking logic
-    def _solve_backtracking(self) -> Optional[List[str]]:
-        """
-        A systematic backtracking search to find one valid arrangement.
-        """
-        arrangement: List[Optional[str]] = [None] * self.n
-        remaining_elements = set(self.elements)
-
-        # A simple heuristic: try to place more constrained elements first.
-        constrained_elements_count = {elem: 0 for elem in self.elements}
-        all_constraints = (self.forbidden_constraints + self.required_disjunctive_constraints)
-        for constraint in all_constraints:
-            constrained_elements_count[constraint[0]] += 1
-            for y in constraint[1]:
-                 constrained_elements_count[y] += 1
-        
-        # Sort elements to place by how constrained they are, descending.
-        elements_to_place = sorted(
-            list(self.elements), 
-            key=lambda e: constrained_elements_count[e], 
-            reverse=True
-        )
-
-        return self._backtrack_recursive(arrangement, elements_to_place)
-
-    def _backtrack_recursive(self, arrangement: List[Optional[str]], elements_to_place: List[str]) -> Optional[List[str]]:
-        """The recursive core of the backtracking solver."""
-        # Base case: If there are no more elements to place, we found a solution.
-        if not elements_to_place:
-            return [elem for elem in arrangement if elem is not None]
-
-        element_to_try = elements_to_place[0]
-        remaining = elements_to_place[1:]
-
-        # Iterate through all available empty slots for the current element
-        for i in range(self.n):
-            if arrangement[i] is None:
-                # Try placing the element in the current slot
-                arrangement[i] = element_to_try
-
-                # Check if this partial arrangement is still valid
-                if self.is_valid_placement(arrangement):
-                    # If it's valid, recurse to place the next element
-                    result = self._backtrack_recursive(arrangement, remaining)
-                    if result:
-                        return result  # Solution found, propagate it up
-
-                # Backtrack: Undo the placement if it didn't lead to a solution
-                arrangement[i] = None
-        
-        # If we tried all positions for this element and none worked, this path is a dead end.
-        return None
+        if method.lower() == "ortools":
+            return self.solve_with_ortools(time_limit)
+        elif method.lower() == "z3":
+            return self.solve_with_z3(time_limit * 1000)  # Convert to milliseconds
+        else:
+            raise ValueError("Method must be 'ortools' or 'z3'")
 
 def get_intervals(interval_str):
     # First, parse the positions of intervals
@@ -345,18 +524,18 @@ def accumulate_dependencies(graph):
 
         path.append(node)
         neighbors = {}
+        accumulated = {}
         for neighbor in graph[node]:
             if neighbor in prev_neighbors:
                 if prev_neighbors[neighbor][1] == 0 or graph[node][neighbor] == 1:
                     warnings.append(f"Warning: {neighbor!r} has a redundant dependency {prev_neighbors[neighbor][0]!r} given by {' <- '.join([str(x) for x in path[path.index(prev_neighbors[neighbor][0]):] + [neighbor]])}")
             neighbors[neighbor] = [node, graph[node][neighbor]]
+            accumulated[neighbor] = graph[node][neighbor]
         new_neighbors = dict(neighbors)
         new_neighbors.update(prev_neighbors)
-        accumulated = {}
         for neighbor in neighbors:
             if neighbor in graph:
                 accumulated.update(dfs(neighbor, visited, path.copy(), new_neighbors))
-        accumulated.update(neighbors)
         
         path.pop()
         # result[node] = accumulated
@@ -490,6 +669,8 @@ def sorter(table_original, errors, warnings):
                                 return table_original
                             intervals = get_intervals(instr)
                         numbers = []
+                        if i==8:
+                            print(f"Processing instruction: {instr!r} in row {i}, column {alph[j]}")
                         if match.group("number"):
                             number = int(match.group("number"))
                             if number == 0 or number > len(table):
@@ -510,6 +691,9 @@ def sorter(table_original, errors, warnings):
                                 return table_original
                             if table[names[name]][path_index]:
                                 numbers.append(names[name])
+                            if names[name] in attributes:
+                                for r in attributes[names[name]].keys():
+                                    numbers.append(r)
                         numbers = list(map(lambda x: new_indexes[x], numbers))
                         instr_table[i].append(instr_struct(instr_type, match.group("any"), numbers, intervals))
     for i in valid_row_indexes:
@@ -543,7 +727,7 @@ def sorter(table_original, errors, warnings):
                 stack.append(i)
                 errors.append(f"Cycle detected: {(' after ' if p else ' before ').join([str(to_old_indexes[k]) for k in stack])}")
                 return table_original
-    sorter = ConstraintSorter(alph[:len(valid_row_indexes)])
+    sorter = EfficientConstraintSorter(alph[:len(valid_row_indexes)])
     go(alph, instr_table, sorter)
     for cat, rows in attributes.items():
         category = [k for k, v in rows.items() if v]
@@ -552,7 +736,7 @@ def sorter(table_original, errors, warnings):
 
     # Solve the problem
     print("Solving constraint-based sorting problem...")
-    solution = sorter.solve(max_iterations=2000)
+    solution = sorter.solve(method="ortools", time_limit=300)
     
     if not solution:
         errors.append("No valid solution found!")
@@ -561,8 +745,6 @@ def sorter(table_original, errors, warnings):
         errors.append(f"Error when sorting: {solution!r}")
         return table_original
     print(f"Solution found: {solution}")
-    print(f"Is valid: {sorter.is_valid_placement(solution)}")
-    print(f"Distance score: {sorter.calculate_distance_score(solution)}")
     
     # Show positions for clarity
     print("\nPositions:")
