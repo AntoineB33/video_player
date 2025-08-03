@@ -213,7 +213,7 @@ class EfficientConstraintSorter:
                 return None
     
     def _solve_lexicographic_ortools(self, base_model, position, time_limit_seconds):
-        """Solve with lexicographic optimization: maximize distances in sorted order."""
+        """Solve with lexicographic optimization and display intermediate solutions."""
         print("Starting lexicographic optimization with OR-Tools...")
 
         # Collect valid pairs
@@ -261,22 +261,61 @@ class EfficientConstraintSorter:
             for j in range(k):
                 model.Add(sorted_dist[j] == dist[i]).OnlyEnforceIf(b[i][j])
 
+        # Custom solution callback to capture intermediate solutions
+        class SolutionPrinter(cp_model.CpSolverSolutionCallback):
+            def __init__(self, elements, position_vars, dist_vars, sorted_vars):
+                cp_model.CpSolverSolutionCallback.__init__(self)
+                self.elements = elements
+                self.position_vars = position_vars
+                self.dist_vars = dist_vars
+                self.sorted_vars = sorted_vars
+                self.n = len(elements)
+                self.solution_count = 0
+                self.last_objective = float('-inf')
+
+            def on_solution_callback(self):
+                current_objective = self.Value(self.sorted_vars[0])
+                if current_objective > self.last_objective:
+                    self.last_objective = current_objective
+                    self.solution_count += 1
+
+                    # Build current solution
+                    solution = [''] * self.n
+                    for elem in self.elements:
+                        pos = self.Value(self.position_vars[elem])
+                        solution[pos] = elem
+                    
+                    # Calculate and sort actual distances
+                    actual_distances = []
+                    for x, y in valid_pairs:
+                        pos_x = solution.index(x)
+                        pos_y = solution.index(y)
+                        actual_distances.append(abs(pos_x - pos_y))
+                    actual_distances.sort()
+
+                    print(f"\nImproved solution #{self.solution_count}:")
+                    print(f"  Ordering: {solution}")
+                    print(f"  Sorted distances: {actual_distances}")
+
         # Sequential maximization
         solver = cp_model.CpSolver()
-        solver.parameters.max_time_in_seconds = time_limit_seconds / max(1, k)  # Distribute time
+        solver.parameters.max_time_in_seconds = time_limit_seconds / max(1, k)
+        solution_printer = SolutionPrinter(self.elements, model_position, dist, sorted_dist)
         optimal_values = []
 
         for j in range(k):
-            print(f"Maximizing sorted distance {j + 1} of {k}...")
+            print(f"\nMaximizing sorted distance {j + 1} of {k}...")
             model.Maximize(sorted_dist[j])
-            status = solver.Solve(model)
+            status = solver.SolveWithSolutionCallback(model, solution_printer)
+            
             if status != cp_model.OPTIMAL and status != cp_model.FEASIBLE:
                 self.last_violations = [f"Failed to maximize sorted_dist[{j}]: {solver.StatusName(status)}"]
                 return None
+            
             s_j = solver.Value(sorted_dist[j])
             optimal_values.append(s_j)
-            model.Add(sorted_dist[j] >= s_j)  # Fix this distance for subsequent steps
-            print(f"  sorted_dist[{j}] maximized to {s_j}")
+            model.Add(sorted_dist[j] >= s_j)
+            print(f"  Achieved value: {s_j}")
 
         # Extract final solution
         solution = [''] * self.n
@@ -286,9 +325,11 @@ class EfficientConstraintSorter:
 
         # Report final distances
         actual_distances = [abs(solution.index(x) - solution.index(y)) for x, y in valid_pairs]
-        print(f"Final distances: {sorted(actual_distances)}")
+        print(f"\nFinal solution:")
+        print(f"  Ordering: {solution}")
+        print(f"  Sorted distances: {sorted(actual_distances)}")
         return solution
-        
+            
     def _add_constraints_to_model(self, model, position):
         """Helper method to add all original constraints to a model."""
         # Add forbidden constraints
@@ -541,7 +582,7 @@ def accumulate_dependencies(graph):
                 accumulated[key] = tuple(value)
                 accumulated[key][1].append(node)
                 if key in graph[node]:
-                    warnings.append(f"Warning: {neighbor!r} has a redundant dependency {key!r} given by {' -> '.join([str(x) for x in list(reversed(accumulated[key][1])) + [key]])}")
+                    warnings.append(f"Warning: {key!r} has a redundant dependency {node!r} given by {' -> '.join([str(x) for x in accumulated[key][1]])}")
         path.pop()
         result[node] = accumulated
         return accumulated
@@ -743,8 +784,7 @@ def sorter(table_original, errors, warnings):
 
     # Solve the problem
     print("Solving constraint-based sorting problem...")
-    solution = sorter.solve(method="ortools", time_limit=300)
-    # solution = sorter.solve(method="z3", time_limit=3000000)
+    solution = sorter.solve(method="ortools", time_limit=30000)
     
     if not solution:
         errors.append("No valid solution found!")
