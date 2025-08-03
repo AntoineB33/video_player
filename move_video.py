@@ -30,9 +30,9 @@ if file_path and clipboard_content and os.path.isfile(file_path) and re.match(r'
 
     if os.path.exists(new_path):
         input(f"File {new_name} already exists in {destination_folder}.")
+    else:
     
-    # Encrypt the file before moving
-    encrypt_file(file_path, new_path)
-    print(f"File moved to: {new_path}")
+        # Encrypt the file before moving
+        encrypt_file(file_path, new_path)
 else:
     input("Clipboard does not contain a valid quoted file path.")

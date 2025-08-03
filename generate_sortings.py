@@ -12,11 +12,12 @@ PATTERN_DISTANCE = r'^(?P<prefix>as far as possible from )(?P<any>any)?((?P<numb
 PATTERN_AREAS = r'^(?P<prefix>.*\|)(?P<any>any)?((?P<number>\d+)|(?P<name>.+))(?P<suffix>\|.*)$'
 
 class instr_struct:
-    def __init__(self, instr_type: int, any: bool, numbers: List[int], intervals: List[Tuple[int, int]] = None):
+    def __init__(self, instr_type: int, any: bool, numbers: List[int], intervals: List[Tuple[int, int]], path: List[int] = []):
         self.instr_type = instr_type
         self.any = any
         self.numbers = numbers
         self.intervals = intervals
+        self.path = path
 
     def __eq__(self, other):
         if not isinstance(other, instr_struct):
@@ -24,7 +25,8 @@ class instr_struct:
         return (self.instr_type == other.instr_type and
                 self.any == other.any and
                 sorted(self.numbers) == sorted(other.numbers) and
-                sorted(self.intervals) == sorted(other.intervals))
+                sorted(self.intervals) == sorted(other.intervals) and
+                sorted(self.path) == sorted(other.path))
 
     def __hash__(self):
         return hash((
@@ -699,7 +701,7 @@ def order_table(res, table, roles, dep_pattern):
                     updated_cell = cell.split('; ')
                     for d, instr in enumerate(list(updated_cell)):
                         instr_split = instr.split('.')
-                        if dep_pattern[j]:
+                        if len(dep_pattern[j]) > 1:
                             instr = dep_pattern[j][0] + ''.join([instr_split[i]+dep_pattern[j][i+1] for i in range(len(instr_split))])
                         match = re.match(PATTERN_DISTANCE, instr)
                         if not match:
@@ -731,36 +733,32 @@ def order_table(res, table, roles, dep_pattern):
     return new_table
 
 def accumulate_dependencies(graph):
-    def dfs(node, visited, path, prev_neighbors):
+    def dfs(node, path):
         if node in path:
             cycle_start = path.index(node)
             cycle = path[cycle_start:] + [node]
             raise ValueError(f"Cycle detected: {' -> '.join(cycle)}")
-        # if node in result:
-        #     return result[node]
+        if node in result:
+            return result[node]
 
         path.append(node)
-        neighbors = {}
-        accumulated = {}
+        accumulated = dict(graph[node])
         for neighbor in graph[node]:
-            if neighbor in prev_neighbors:
-                if prev_neighbors[neighbor][1] == 0 or graph[node][neighbor] == 1:
-                    warnings.append(f"Warning: {neighbor!r} has a redundant dependency {prev_neighbors[neighbor][0]!r} given by {' <- '.join([str(x) for x in path[path.index(prev_neighbors[neighbor][0]):] + [neighbor]])}")
-            neighbors[neighbor] = [node, graph[node][neighbor]]
-            accumulated[neighbor] = graph[node][neighbor]
-        new_neighbors = dict(neighbors)
-        new_neighbors.update(prev_neighbors)
-        for neighbor in neighbors:
-            if neighbor in graph:
-                accumulated.update(dfs(neighbor, visited, path.copy(), new_neighbors))
-        
+            if neighbor not in graph:
+                continue
+            res = dfs(neighbor, path.copy())
+            for key, value in res.items():
+                accumulated[key] = tuple(value)
+                accumulated[key][1].append(node)
+                if key in graph[node]:
+                    warnings.append(f"Warning: {neighbor!r} has a redundant dependency {key!r} given by {' -> '.join([str(x) for x in list(reversed(accumulated[key][1])) + [key]])}")
         path.pop()
-        # result[node] = accumulated
+        result[node] = accumulated
         return accumulated
 
     result = {}
     for node in graph:
-        result[node] = dfs(node, set(), [], {})
+        dfs(node, [])
     return result
 
 def sorter(table_original, errors, warnings):
@@ -830,10 +828,9 @@ def sorter(table_original, errors, warnings):
                     if k not in attributes:
                         attributes[k] = {}
                     if i not in attributes[k]:
-                        attributes[k][i] = is_sprawl
+                        attributes[k][i] = (is_sprawl, [i, k])
                     else:
                         warnings.append(f"Redundant attribute {instr!r} in row {i}, column {alph[j]}")
-
     attributes = accumulate_dependencies(attributes)
     valid_row_indexes = []
     new_indexes = list(range(len(table)))
@@ -886,8 +883,6 @@ def sorter(table_original, errors, warnings):
                                 return table_original
                             intervals = get_intervals(instr)
                         numbers = []
-                        if i==8:
-                            print(f"Processing instruction: {instr!r} in row {i}, column {alph[j]}")
                         if match.group("number"):
                             number = int(match.group("number"))
                             if number == 0 or number > len(table):
@@ -916,7 +911,10 @@ def sorter(table_original, errors, warnings):
     for i in valid_row_indexes:
         for j in attributes_table[i]:
             if type(j) is int:
-                instr_table[i] = list(set(instr_table[i] + instr_table[j]))
+                new_instr = [x for x in instr_table[j] if x not in instr_table[i]]
+                for x in new_instr:
+                    x.path = attributes[j][i][1][:-1] + x.path
+                instr_table[i].extend(new_instr)
     instr_table_int = []
     for i in valid_row_indexes:
         instr_table_int.append(instr_table[i])
@@ -924,30 +922,30 @@ def sorter(table_original, errors, warnings):
     # detect cycles in instr_table
     def has_cycle(instr_table, visited, stack, node, after=True):
         visited.add(node)
-        stack.append(node)
         for neighbor in instr_table[node]:
             if neighbor.any or not neighbor.instr_type or (neighbor.intervals[0] != (-float("inf"), -1) if after else neighbor.intervals[-1] != (1, float("inf"))):
                 continue
             for target in neighbor.numbers:
+                stack.append([node, []])
+                stack[-1][1] = neighbor.path
                 if target not in visited:
                     if has_cycle(instr_table, visited, stack, target, after):
                         return True
-                elif target in stack and len(stack) > 1:
+                elif any(target == k for k, _ in stack) and len(stack) > 1:
                     return True
-        stack.pop()
+                stack.pop()
         return False
     for p in [0, 1]:
-        stack = []
         visited = set()
         for i in range(len(instr_table)):
+            stack = [[i, []]]
             if has_cycle(instr_table, visited, stack, i, p):
-                stack.append(i)
-                errors.append(f"Cycle detected: {(' after ' if p else ' before ').join([str(to_old_indexes[k]) for k in stack])}")
+                errors.append(f"Cycle detected: {(' after ' if p else ' before ').join(['->'.join([str(x) for x in (k[1] if k[1] else [i])]) for k in stack])}")
                 return table_original
     sorter = EfficientConstraintSorter(alph[:len(valid_row_indexes)])
     go(alph, instr_table, sorter)
     for cat, rows in attributes.items():
-        category = [k for k, v in rows.items() if v]
+        category = [k for k, v in rows.items() if v[0]]
         if len(category) > 1:
             sorter.add_group_maximize(set(map(lambda x: new_indexes[x], category)))
 
