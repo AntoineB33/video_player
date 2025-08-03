@@ -743,8 +743,7 @@ def sorter(table_original, errors, warnings):
 
     # Solve the problem
     print("Solving constraint-based sorting problem...")
-    solution = sorter.solve(method="ortools", time_limit=300)
-    # solution = sorter.solve(method="z3", time_limit=3000000)
+    solution = sorter.solve(method="ortools", time_limit=30000)
     
     if not solution:
         errors.append("No valid solution found!")
