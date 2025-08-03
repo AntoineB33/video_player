@@ -373,216 +373,6 @@ class EfficientConstraintSorter:
             if satisfied_with_y:
                 model.AddBoolOr(satisfied_with_y)
 
-    def solve_with_z3(self, time_limit_ms: int = 300000) -> Optional[List[str]]:
-        """Solve using Z3 SMT solver with lexicographic optimization."""
-        # Create Z3 variables
-        position = {}
-        for elem in self.elements:
-            position[elem] = Int(f'pos_{elem}')
-        
-        # Create solver
-        solver = Solver()
-        solver.set("timeout", time_limit_ms)
-        
-        # Domain constraints: all positions are in [0, n-1]
-        for elem in self.elements:
-            solver.add(And(position[elem] >= 0, position[elem] < self.n))
-        
-        # All different constraint (permutation)
-        solver.add(Distinct([position[elem] for elem in self.elements]))
-        
-        # Add forbidden constraints
-        for x, y, intervals in self.forbidden_constraints:
-            if x not in self.elements or y not in self.elements:
-                continue
-            
-            for start, end in intervals:
-                if start == float('inf') or end == float('inf'):
-                    continue
-                
-                start_int, end_int = int(start), int(end)
-                
-                # NOT (start_int <= pos[x] - pos[y] <= end_int)
-                # Equivalent to: pos[x] - pos[y] < start_int OR pos[x] - pos[y] > end_int
-                solver.add(Or(
-                    position[x] - position[y] < start_int,
-                    position[x] - position[y] > end_int
-                ))
-        
-        # Add required disjunctive constraints
-        for x, y_list, intervals in self.required_disjunctive_constraints:
-            if x not in self.elements:
-                continue
-            
-            valid_y_list = [y for y in y_list if y in self.elements]
-            if not valid_y_list:
-                continue
-            
-            # For each y in y_list, check if constraint is satisfied
-            satisfied_conditions = []
-            
-            for y in valid_y_list:
-                # x satisfies constraint with y if it's outside all forbidden intervals
-                outside_all_intervals = []
-                
-                for start, end in intervals:
-                    if start == float('inf') or end == float('inf'):
-                        continue
-                    
-                    start_int, end_int = int(start), int(end)
-                    
-                    # Outside this interval: pos[x] - pos[y] < start_int OR pos[x] - pos[y] > end_int
-                    outside_interval = Or(
-                        position[x] - position[y] < start_int,
-                        position[x] - position[y] > end_int
-                    )
-                    outside_all_intervals.append(outside_interval)
-                
-                if outside_all_intervals:
-                    # Satisfied with y if outside ALL intervals
-                    satisfied_with_y = And(outside_all_intervals)
-                    satisfied_conditions.append(satisfied_with_y)
-            
-            # At least one y must satisfy the constraint
-            if satisfied_conditions:
-                solver.add(Or(satisfied_conditions))
-        
-        # Check satisfiability first
-        if solver.check() != sat:
-            self.last_violations = ["Z3 solver could not find a satisfiable solution"]
-            return None
-        
-        # If we have distance maximization constraints, use lexicographic optimization
-        if self.maximize_distance:
-            return self._solve_lexicographic_z3(position, solver, time_limit_ms)
-        else:
-            # No distance constraints, return current solution
-            model = solver.model()
-            solution = [''] * self.n
-            for elem in self.elements:
-                pos = model[position[elem]].as_long()
-                solution[pos] = elem
-            return solution
-    
-    def _solve_lexicographic_z3(self, position, base_solver, time_limit_ms):
-        """Solve with lexicographic optimization using Z3."""
-        valid_pairs = [(x, y) for x, y in self.maximize_distance 
-                      if x in self.elements and y in self.elements]
-        
-        if not valid_pairs:
-            # No valid pairs, return base solution
-            model = base_solver.model()
-            solution = [''] * self.n
-            for elem in self.elements:
-                pos = model[position[elem]].as_long()
-                solution[pos] = elem
-            return solution
-        
-        print("Z3 Phase 1: Finding maximum minimum distance...")
-        
-        # Binary search for maximum minimum distance
-        low, high = 1, self.n - 1
-        best_min_distance = 0
-        best_solution = None
-        
-        while low <= high:
-            mid = (low + high) // 2
-            
-            # Create test solver
-            test_solver = Solver()
-            test_solver.set("timeout", max(1000, time_limit_ms // 20))  # Use fraction of time
-            
-            # Add all base constraints
-            for constraint in base_solver.assertions():
-                test_solver.add(constraint)
-            
-            # Add minimum distance constraints
-            for x, y in valid_pairs:
-                test_solver.add(Or(
-                    position[x] - position[y] >= mid,
-                    position[y] - position[x] >= mid
-                ))
-            
-            if test_solver.check() == sat:
-                best_min_distance = mid
-                model = test_solver.model()
-                solution = [''] * self.n
-                for elem in self.elements:
-                    pos = model[position[elem]].as_long()
-                    solution[pos] = elem
-                best_solution = solution
-                low = mid + 1
-                print(f"  Z3: Minimum distance {mid} is achievable")
-            else:
-                high = mid - 1
-                print(f"  Z3: Minimum distance {mid} is not achievable")
-        
-        if best_solution is None:
-            self.last_violations = ["Z3 could not find any solution with distance constraints"]
-            return None
-        
-        print(f"Z3 Phase 1 complete: Maximum minimum distance = {best_min_distance}")
-        print("Z3 Phase 2: Maximizing sum of distances...")
-        
-        # Phase 2: Optimize sum while maintaining minimum distance
-        # For Z3, we'll use iterative improvement since it doesn't have built-in optimization
-        current_solution = best_solution
-        current_sum = sum(abs(current_solution.index(x) - current_solution.index(y)) 
-                         for x, y in valid_pairs)
-        
-        # Try to find better solutions by increasing the target sum
-        for target_sum in range(current_sum + 1, current_sum + 50):  # Limited search
-            opt_solver = Solver()
-            opt_solver.set("timeout", max(1000, time_limit_ms // 10))
-            
-            # Add base constraints
-            for constraint in base_solver.assertions():
-                opt_solver.add(constraint)
-            
-            # Add minimum distance constraint
-            for x, y in valid_pairs:
-                opt_solver.add(Or(
-                    position[x] - position[y] >= best_min_distance,
-                    position[y] - position[x] >= best_min_distance
-                ))
-            
-            # Add sum constraint (approximation)
-            sum_expr = 0
-            for x, y in valid_pairs:
-                # Approximate absolute value with two variables
-                diff_pos = Int(f'diff_pos_{x}_{y}')
-                diff_neg = Int(f'diff_neg_{x}_{y}')
-                
-                opt_solver.add(diff_pos >= 0)
-                opt_solver.add(diff_neg >= 0)
-                opt_solver.add(diff_pos >= position[x] - position[y])
-                opt_solver.add(diff_neg >= position[y] - position[x])
-                opt_solver.add(Or(diff_pos == 0, diff_neg == 0))
-                
-                sum_expr += diff_pos + diff_neg
-            
-            opt_solver.add(sum_expr >= target_sum)
-            
-            if opt_solver.check() == sat:
-                model = opt_solver.model()
-                solution = [''] * self.n
-                for elem in self.elements:
-                    pos = model[position[elem]].as_long()
-                    solution[pos] = elem
-                current_solution = solution
-                current_sum = target_sum
-            else:
-                break  # No better solution found
-        
-        # Calculate final metrics
-        min_dist = min(abs(current_solution.index(x) - current_solution.index(y)) 
-                      for x, y in valid_pairs)
-        sum_dist = sum(abs(current_solution.index(x) - current_solution.index(y)) 
-                      for x, y in valid_pairs)
-        print(f"Z3 Phase 2 complete: Minimum distance = {min_dist}, Sum of distances = {sum_dist}")
-        
-        return current_solution
-    
     def solve(self, method: str = "ortools", time_limit: int = 300) -> Optional[List[str]]:
         """
         Solve the constraint satisfaction problem with lexicographic optimization.
@@ -828,7 +618,7 @@ def sorter(table_original, errors, warnings):
                     if k not in attributes:
                         attributes[k] = {}
                     if i not in attributes[k]:
-                        attributes[k][i] = (is_sprawl, [i, k])
+                        attributes[k][i] = (is_sprawl, [k])
                     else:
                         warnings.append(f"Redundant attribute {instr!r} in row {i}, column {alph[j]}")
     attributes = accumulate_dependencies(attributes)
@@ -911,36 +701,38 @@ def sorter(table_original, errors, warnings):
     for i in valid_row_indexes:
         for j in attributes_table[i]:
             if type(j) is int:
-                new_instr = [x for x in instr_table[j] if x not in instr_table[i]]
-                for x in new_instr:
-                    x.path = attributes[j][i][1][:-1] + x.path
-                instr_table[i].extend(new_instr)
+                for x in instr_table[j]:
+                    if x not in instr_table[i]:
+                        x.path = attributes[j][i][1] + x.path
+                        instr_table[i].append(x)
+                    elif len(instr_table[i][instr_table[i].index(x)].path) == 1:
+                        warnings.append(f"Redundant instruction {x!r} in row {i}, column {alph[j]} given by {' -> '.join([str(x) for x in attributes[j][i][1] + x.path])}")
     instr_table_int = []
     for i in valid_row_indexes:
         instr_table_int.append(instr_table[i])
     instr_table = instr_table_int
     # detect cycles in instr_table
     def has_cycle(instr_table, visited, stack, node, after=True):
+        stack.append([to_old_indexes[node]])
         visited.add(node)
         for neighbor in instr_table[node]:
             if neighbor.any or not neighbor.instr_type or (neighbor.intervals[0] != (-float("inf"), -1) if after else neighbor.intervals[-1] != (1, float("inf"))):
                 continue
             for target in neighbor.numbers:
-                stack.append([node, []])
-                stack[-1][1] = neighbor.path
+                stack[-1][1:] = neighbor.path
                 if target not in visited:
                     if has_cycle(instr_table, visited, stack, target, after):
                         return True
-                elif any(target == k for k, _ in stack) and len(stack) > 1:
+                elif any(target == k[0] for k in stack):
                     return True
-                stack.pop()
+        stack.pop()
         return False
     for p in [0, 1]:
         visited = set()
+        stack = []
         for i in range(len(instr_table)):
-            stack = [[i, []]]
             if has_cycle(instr_table, visited, stack, i, p):
-                errors.append(f"Cycle detected: {(' after ' if p else ' before ').join(['->'.join([str(x) for x in (k[1] if k[1] else [i])]) for k in stack])}")
+                errors.append(f"Cycle detected: {(' after ' if p else ' before ').join(['->'.join([str(x) for x in k]) for k in stack])}")
                 return table_original
     sorter = EfficientConstraintSorter(alph[:len(valid_row_indexes)])
     go(alph, instr_table, sorter)
@@ -952,6 +744,7 @@ def sorter(table_original, errors, warnings):
     # Solve the problem
     print("Solving constraint-based sorting problem...")
     solution = sorter.solve(method="ortools", time_limit=300)
+    # solution = sorter.solve(method="z3", time_limit=3000000)
     
     if not solution:
         errors.append("No valid solution found!")
@@ -1002,6 +795,8 @@ if __name__ == "__main__":
             if any(row[j] for row in table):
                 crop_column = j + 1
                 break
+        fst_row = table[0]
+        fst_col = [row[0] for row in table]
         table = table[1:crop_line]
         for i in range(len(table)):
             table[i] = table[i][1:crop_column]
@@ -1023,6 +818,9 @@ if __name__ == "__main__":
             print("Warnings found:")
             for warning in warnings:
                 print(f"- {warning}")
+        result = [fst_row] + result
+        for i in range(len(result)):
+            result[i] = [fst_col[i]] + result[i]
         new_clipboard_content = '\n'.join(['\t'.join(row) for row in result])
         pyperclip.copy(new_clipboard_content)
         input("Sorted table copied to clipboard. Press Enter to exit.")
