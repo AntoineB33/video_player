@@ -812,29 +812,6 @@ def sorter(table_original, errors, warnings):
     for i in valid_row_indexes:
         instr_table_int.append(instr_table[i])
     instr_table = instr_table_int
-    # detect cycles in instr_table
-    def has_cycle(instr_table, visited, stack, node, after=True):
-        stack.append([to_old_indexes[node]])
-        visited.add(node)
-        for neighbor in instr_table[node]:
-            if neighbor.any or not neighbor.instr_type or (neighbor.intervals[0] != (-float("inf"), -1) if after else neighbor.intervals[-1] != (1, float("inf"))):
-                continue
-            for target in neighbor.numbers:
-                stack[-1][1:] = neighbor.path
-                if target not in visited:
-                    if has_cycle(instr_table, visited, stack, target, after):
-                        return True
-                elif any(target == k[0] for k in stack):
-                    return True
-        stack.pop()
-        return False
-    for p in [0, 1]:
-        visited = set()
-        stack = []
-        for i in range(len(instr_table)):
-            if has_cycle(instr_table, visited, stack, i, p):
-                errors.append(f"Cycle detected: {(' after ' if p else ' before ').join(['->'.join([str(x) for x in k]) for k in stack])}")
-                return table_original
     sorter = EfficientConstraintSorter(alph[:len(valid_row_indexes)])
     go(alph, instr_table, sorter)
     for cat, rows in attributes.items():
