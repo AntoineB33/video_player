@@ -1,7 +1,7 @@
 from cryptography.fernet import Fernet
 from pathlib import Path
 import os
-from url_to_filename import url_to_filename
+from url_to_filename import url_to_filename, filename_to_url
 from config import KEY_PATH, PLAYLISTS_PATH, DEFAULT_PLAYLIST_FILE, ENCRYPTED_MEDIA_PATH, DECRYPTED_MEDIA_PATH
 
 def load_key(key_path=KEY_PATH):
@@ -24,7 +24,7 @@ def decrypt_file(in_path, out_path, key_path=KEY_PATH):
     os.remove(in_path)
 
 def read_playlist(file_path):
-    """Read video paths from a text file"""
+    """Read medium paths from a text file"""
     if not os.path.exists(file_path):
         input(f"Error: Playlist file does not exist: {file_path}")
         return []
@@ -66,19 +66,26 @@ def get_playlist_status():
         if if_default:
             suffix = " (default)"
         paths = read_playlist(os.path.join(PLAYLISTS_PATH, file))
-        playlists[file] = [Path(DECRYPTED_MEDIA_PATH) / path for path in paths]
+        playlists[file] = {"media":[], "not_decrypted": []}
         with open(os.path.join(PLAYLISTS_PATH, file), 'r') as f:
-            videos = [
+            media = [
                 line.strip()
                 for line in f.readlines()
                 if line.strip()
             ]
-        for i, path in enumerate(playlists[file]):
-            files_found = files_with_same_stem(path)
+        for i, path in enumerate(paths):
+            path = Path(path)
+            files_found = files_with_same_stem(Path(DECRYPTED_MEDIA_PATH) / path.name)
             if files_found:
-                playlists[file][i] = files_found[0]
+                playlists[file]["media"].append(files_found[0])
             else:
-                suffix += f"\n\t(video {i + 1} missing : {videos[i]})"
+                url = filename_to_url(path.name)
+                files_found = files_with_same_stem(Path(ENCRYPTED_MEDIA_PATH) / path.name)
+                if files_found:
+                    playlists[file]["not_decrypted"].append(files_found[0])
+                    suffix += f"\n\t(medium {i + 1} not decrypted: {url})"
+                else:
+                    suffix += f"\n\t(medium {i + 1} missing: {url})"
         playlist_infos.append((file, suffix, if_default))
 
     for idx, (file, suffix, if_default) in enumerate(playlist_infos, 1):
@@ -106,19 +113,22 @@ if __name__ == "__main__":
     try:
         playlist = playlists.get(playlist_name, [])
         if not playlist:
-            raise ValueError("No valid videos found in playlist!")
+            raise ValueError("No valid media found in playlist!")
         with open(DEFAULT_PLAYLIST_FILE, "w") as f:
             f.write(playlist_name)
         # decrypt all files in the playlist
-        for video in playlist:
+        for medium in playlist["not_decrypted"]:
             try:
-                in_path = Path(ENCRYPTED_MEDIA_PATH) / video.name
-                out_path = Path(DECRYPTED_MEDIA_PATH) / video.name
+                in_path = Path(ENCRYPTED_MEDIA_PATH) / medium.name
+                out_path = Path(DECRYPTED_MEDIA_PATH) / medium.name
                 decrypt_file(in_path, out_path)
-                print(f"Decrypted {in_path} to {out_path}")
-            except FileNotFoundError:
-                print(f"Error: File not found for decryption: {video}")
-    except Exception as e:
+                print(f"Decrypted {filename_to_url(medium.name)}")
+            # except FileNotFoundError:
+            except KeyboardInterrupt:
+                input(f"Error: File not found for decryption: {medium}")
+                break
+    # except Exception as e:
+    except KeyboardInterrupt as e:
         input(f"Error: Unexpected error:\n{e}")
 
     # decrypt_file(

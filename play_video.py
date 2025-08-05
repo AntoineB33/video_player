@@ -12,12 +12,15 @@ ctypes.CDLL(os.path.join(libvlc_dir, "libvlc.dll"))
 import tkinter as tk
 from tkinter import messagebox
 import vlc
+import threading
+import time
 
 class FullscreenPlayer:
     def __init__(self, master, playlist):
         self.master = master
         self.playlist = playlist
         self.playlist_index = 0
+        self.seeking = False  # Flag to track if we're currently seeking
         
         if not self.playlist:
             messagebox.showerror("Error", "Playlist is empty!")
@@ -44,25 +47,39 @@ class FullscreenPlayer:
         master.update()  # Force update to ensure frame is created
         master.focus_force()
 
-        # VLC configuration options
+        # Improved VLC configuration options for better seeking
         vlc_options = [
             "--no-osd",
             "--no-video-title-show",
             "--quiet",
             "--no-embedded-video",
             
-            "--avcodec-hw=dxva2",  # Windows hardware decoding
-
-            # "--avcodec-hw=any --codec av1",
-
-            # "--ffmpeg-hw",          # Enable FFmpeg hardware acceleration
-            "--drop-late-frames",   # Prevent A/V desync
-            "--skip-frames",        # Allow frame skipping during seeks
-
-            "--winrt-d3dcontext",  # Windows 11 Direct3D11 optimization
-            "--d3d11",             # Force Direct3D11 rendering
-            # "--enable-sout",       # Enable streaming output (if needed)
-            "--network-caching=1500"  # Adjust buffer for network streams
+            # Hardware acceleration
+            "--avcodec-hw=dxva2",
+            
+            # Seeking and sync improvements
+            "--avcodec-fast",              # Fast decoding for seeking
+            "--sout-avcodec-strict=-2",    # Allow experimental features
+            "--audio-desync=0",            # Reset audio desync
+            "--audio-replay-gain-mode=none", # Disable audio processing that can cause delays
+            
+            # Buffer and caching optimizations
+            "--file-caching=300",          # Reduce file caching (default 1000ms)
+            "--network-caching=300",       # Reduce network caching
+            "--live-caching=300",          # Reduce live stream caching
+            
+            # Frame handling
+            "--drop-late-frames",          # Drop frames that are too late
+            "--skip-frames",               # Allow frame skipping
+            "--avcodec-skiploopfilter=4",  # Skip loop filter for faster decoding
+            
+            # Video output optimizations
+            "--winrt-d3dcontext",
+            "--d3d11",
+            
+            # Seeking precision
+            "--avcodec-threads=0",         # Use all CPU cores for decoding
+            "--verbose=0"                  # Reduce logging overhead
         ]
 
         self.instance = vlc.Instance(" ".join(vlc_options))
@@ -71,33 +88,68 @@ class FullscreenPlayer:
 
         self.events = self.player.event_manager()
         self.events.event_attach(vlc.EventType.MediaPlayerEndReached, self.next_video)
-        # self.print_decoder_info()  # Print decoder info for debugging
+        
+        # Add event handlers for seeking
+        self.events.event_attach(vlc.EventType.MediaPlayerSeekableChanged, self.on_seekable_changed)
+        self.events.event_attach(vlc.EventType.MediaPlayerPositionChanged, self.on_position_changed)
 
         self.load_video()
     
-    def print_decoder_info(self):
-        print(self.player.get_marquee())  # Check "decoder" in output
-        print(self.player.video_get_decode_rate())  # Should be near frame rate
+    def on_seekable_changed(self, event):
+        """Handle when seeking capability changes"""
+        pass
+    
+    def on_position_changed(self, event):
+        """Handle position changes - can be used to detect when seeking is complete"""
+        if self.seeking:
+            # Small delay to ensure audio catches up
+            threading.Timer(0.1, self.finish_seek).start()
+    
+    def finish_seek(self):
+        """Complete the seeking operation"""
+        self.seeking = False
 
     def seek_forward(self, event):
-        """Skip forward 5 seconds"""
+        """Skip forward 5 seconds with improved sync"""
         if self.player.is_playing():
-            current_time = self.player.get_time()
-            self.player.set_time(current_time + 5000)  # 5 seconds in ms
+            self.perform_seek(5000)
 
     def seek_backward(self, event):
-        """Skip backward 5 seconds"""
+        """Skip backward 5 seconds with improved sync"""
         if self.player.is_playing():
-            current_time = self.player.get_time()
-            self.player.set_time(max(0, current_time - 5000))  # 5 seconds in ms
+            self.perform_seek(-5000)
+
+    def perform_seek(self, offset_ms):
+        """Perform seeking with audio/video sync handling"""
+        self.seeking = True
+        current_time = self.player.get_time()
+        target_time = max(0, current_time + offset_ms)
+        
+        # Method 1: Basic seeking with sync reset
+        self.player.set_time(target_time)
+        
+        # Method 2: Alternative - pause/seek/play for better sync (uncomment to try)
+        # was_playing = self.player.is_playing()
+        # if was_playing:
+        #     self.player.pause()
+        # self.player.set_time(target_time)
+        # if was_playing:
+        #     # Small delay before resuming
+        #     threading.Timer(0.05, self.player.play).start()
 
     def seek_to_percentage(self, ratio):
-        """Jump to a specific percentage of the video"""
+        """Jump to a specific percentage of the video with better sync"""
         if self.player.is_playing():
-            total_duration = self.player.get_length()
-            if total_duration > 0:
-                target_time = int(total_duration * ratio)
-                self.player.set_time(target_time)
+            self.seeking = True
+            
+            # Method 1: Using set_position (often more accurate for large jumps)
+            self.player.set_position(ratio)
+            
+            # Method 2: Alternative using time calculation (uncomment to try instead)
+            # total_duration = self.player.get_length()
+            # if total_duration > 0:
+            #     target_time = int(total_duration * ratio)
+            #     self.player.set_time(target_time)
 
     def load_video(self):
         """Load and play the current video from the playlist"""
@@ -131,6 +183,113 @@ class FullscreenPlayer:
         self.player.stop()
         self.master.destroy()
 
+# Alternative approach: Mute during seeking
+class FullscreenPlayerWithMuting(FullscreenPlayer):
+    """Alternative implementation that mutes audio during seeking"""
+    
+    def __init__(self, master, playlist):
+        super().__init__(master, playlist)
+        self.original_volume = 100
+        self.mute_timer = None
+    
+    def perform_seek(self, offset_ms):
+        """Seek with temporary audio muting"""
+        # Store original volume and mute
+        self.original_volume = self.player.audio_get_volume()
+        self.player.audio_set_volume(0)
+        
+        # Perform the seek
+        current_time = self.player.get_time()
+        target_time = max(0, current_time + offset_ms)
+        self.player.set_time(target_time)
+        
+        # Cancel any existing timer
+        if self.mute_timer:
+            self.mute_timer.cancel()
+        
+        # Restore audio after a short delay
+        self.mute_timer = threading.Timer(0.3, self.restore_audio)
+        self.mute_timer.start()
+    
+    def restore_audio(self):
+        """Restore audio volume after seeking"""
+        self.player.audio_set_volume(self.original_volume)
+        self.mute_timer = None
+    
+    def seek_to_percentage(self, ratio):
+        """Jump to percentage with muting"""
+        # Store original volume and mute
+        self.original_volume = self.player.audio_get_volume()
+        self.player.audio_set_volume(0)
+        
+        # Perform the seek
+        self.player.set_position(ratio)
+        
+        # Cancel any existing timer
+        if self.mute_timer:
+            self.mute_timer.cancel()
+        
+        # Restore audio after a longer delay for percentage jumps
+        self.mute_timer = threading.Timer(0.5, self.restore_audio)
+        self.mute_timer.start()
+
+# Usage example:
+# To use the muting version, replace FullscreenPlayer with FullscreenPlayerWithMuting
+# player = FullscreenPlayerWithMuting(root, playlist)
+# Alternative approach: Mute during seeking
+class FullscreenPlayerWithMuting(FullscreenPlayer):
+    """Alternative implementation that mutes audio during seeking"""
+    
+    def __init__(self, master, playlist):
+        super().__init__(master, playlist)
+        self.original_volume = 100
+        self.mute_timer = None
+    
+    def perform_seek(self, offset_ms):
+        """Seek with temporary audio muting"""
+        # Store original volume and mute
+        self.original_volume = self.player.audio_get_volume()
+        self.player.audio_set_volume(0)
+        
+        # Perform the seek
+        current_time = self.player.get_time()
+        target_time = max(0, current_time + offset_ms)
+        self.player.set_time(target_time)
+        
+        # Cancel any existing timer
+        if self.mute_timer:
+            self.mute_timer.cancel()
+        
+        # Restore audio after a short delay
+        self.mute_timer = threading.Timer(0.3, self.restore_audio)
+        self.mute_timer.start()
+    
+    def restore_audio(self):
+        """Restore audio volume after seeking"""
+        self.player.audio_set_volume(self.original_volume)
+        self.mute_timer = None
+    
+    def seek_to_percentage(self, ratio):
+        """Jump to percentage with muting"""
+        # Store original volume and mute
+        self.original_volume = self.player.audio_get_volume()
+        self.player.audio_set_volume(0)
+        
+        # Perform the seek
+        self.player.set_position(ratio)
+        
+        # Cancel any existing timer
+        if self.mute_timer:
+            self.mute_timer.cancel()
+        
+        # Restore audio after a longer delay for percentage jumps
+        self.mute_timer = threading.Timer(0.5, self.restore_audio)
+        self.mute_timer.start()
+
+# Usage example:
+# To use the muting version, replace FullscreenPlayer with FullscreenPlayerWithMuting
+# player = FullscreenPlayerWithMuting(root, playlist)
+
 # --- Entry Point ---
 if __name__ == "__main__":
     playlists, playlist_name = get_playlist_status()
@@ -138,9 +297,9 @@ if __name__ == "__main__":
     try:
         playlist = playlists.get(playlist_name, [])
         if not playlist:
-            messagebox.showerror("Error", "No valid videos found in playlist!")
+            messagebox.showerror("Error", "No valid media found in playlist!")
             sys.exit(1)
-        playlist = [os.path.join(DECRYPTED_MEDIA_PATH, video) for video in playlist]
+        playlist = [os.path.join(DECRYPTED_MEDIA_PATH, video) for video in playlist["media"]]
         with open(DEFAULT_PLAYLIST_FILE, "w") as f:
             f.write(playlist_name)
         root = tk.Tk()
