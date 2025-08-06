@@ -3,13 +3,15 @@ import random
 from typing import List, Tuple, Set, Optional, Dict
 import itertools
 import string
-from ortools.sat.python import cp_model
 from z3 import *
+import threading
 from config import PLAYLISTS_PATH
 
 ROLES = ['path', 'names', 'attributes', 'dependencies', 'sprawl']
 PATTERN_DISTANCE = r'^(?P<prefix>as far as possible from )(?P<any>any)?((?P<number>\d+)|(?P<name>.+))(?P<suffix>)$'
 PATTERN_AREAS = r'^(?P<prefix>.*\|)(?P<any>any)?((?P<number>\d+)|(?P<name>.+))(?P<suffix>\|.*)$'
+
+ortools_loaded = threading.Event()
 
 class instr_struct:
     def __init__(self, instr_type: int, any: bool, numbers: List[int], intervals: List[Tuple[int, int]], path: List[int] = []):
@@ -100,7 +102,12 @@ class EfficientConstraintSorter:
         
         # Handle optimization if required
         if self.maximize_distance:
-            return self._solve_lexicographic_ortools(model, position, time_limit_seconds)
+            result = self._solve_lexicographic_ortools(model, position, time_limit_seconds)
+            if result is None and self.last_violations:
+                print("Lexicographic optimization failed. Error details:")
+                for i, violation in enumerate(self.last_violations, 1):
+                    print(f"  {i}. {violation}")
+            return result
 
         status = solver.Solve(model)
 
@@ -266,8 +273,34 @@ class EfficientConstraintSorter:
                     pos = solver.Value(position[elem])
                     solution[pos] = elem
                 return solution
-            self.last_violations = [f"OR-Tools solver status: {solver.StatusName(status)}"]
+            elif status == cp_model.INFEASIBLE:
+                print("Base model is infeasible during lexicographic optimization. Finding conflicting constraints...")
+                self.last_violations = self._find_conflicting_constraints_ortools()
+                return None
+            else:
+                self.last_violations = [f"OR-Tools solver status: {solver.StatusName(status)}"]
+                return None
+
+        # First, check if the base constraints are feasible
+        print("Checking feasibility of base constraints...")
+        test_model = cp_model.CpModel()
+        test_position = {elem: test_model.NewIntVar(0, self.n - 1, f'pos_{elem}') for elem in self.elements}
+        test_model.AddAllDifferent([test_position[elem] for elem in self.elements])
+        self._add_constraints_to_model(test_model, test_position)
+        
+        test_solver = cp_model.CpSolver()
+        test_solver.parameters.max_time_in_seconds = min(30, time_limit_seconds / 10)  # Quick feasibility check
+        test_status = test_solver.Solve(test_model)
+        
+        if test_status == cp_model.INFEASIBLE:
+            print("Base constraints are infeasible. Finding conflicting constraints...")
+            self.last_violations = self._find_conflicting_constraints_ortools()
             return None
+        elif test_status != cp_model.OPTIMAL and test_status != cp_model.FEASIBLE:
+            self.last_violations = [f"Base constraints feasibility check failed: {test_solver.StatusName(test_status)}"]
+            return None
+        
+        print("Base constraints are feasible. Proceeding with optimization...")
 
         # Create the model
         model = cp_model.CpModel()
@@ -306,7 +339,20 @@ class EfficientConstraintSorter:
             model.Maximize(sorted_dist[j])
             status = solver.Solve(model)
             if status != cp_model.OPTIMAL and status != cp_model.FEASIBLE:
-                self.last_violations = [f"Failed to maximize sorted_dist[{j}]: {solver.StatusName(status)}"]
+                if status == cp_model.INFEASIBLE:
+                    print(f"Model became infeasible while maximizing sorted_dist[{j}]. This suggests the optimization constraints conflict with base constraints.")
+                    # Try to find conflicts in the optimization model
+                    print("Attempting to find conflicting constraints in optimization model...")
+                    self.last_violations = [f"Optimization became infeasible at step {j+1}/{k}. The lexicographic optimization constraints may be too restrictive."]
+                    # Additional diagnostic info
+                    if j > 0:
+                        self.last_violations.append(f"Successfully optimized {j} distance(s) with values: {optimal_values}")
+                        self.last_violations.append("This suggests the conflict arises from the combination of:")
+                        self.last_violations.append("1. Base positioning constraints")
+                        self.last_violations.append("2. Distance maximization requirements")
+                        self.last_violations.append(f"3. Previously fixed distance constraints: sorted_dist[0..{j-1}] >= {optimal_values}")
+                else:
+                    self.last_violations = [f"Failed to maximize sorted_dist[{j}]: {solver.StatusName(status)}"]
                 return None
             s_j = solver.Value(sorted_dist[j])
             optimal_values.append(s_j)
@@ -490,6 +536,12 @@ class EfficientConstraintSorter:
             return self.solve_with_z3(time_limit * 1000)
         else:
             raise ValueError("Method must be 'ortools' or 'z3'")
+
+def preload_ortools():
+    global cp_model
+    from ortools.sat.python import cp_model as _cp_model
+    cp_model = _cp_model
+    ortools_loaded.set()
 
 def get_intervals(interval_str):
     # First, parse the positions of intervals
@@ -812,6 +864,29 @@ def sorter(table_original, errors, warnings):
     for i in valid_row_indexes:
         instr_table_int.append(instr_table[i])
     instr_table = instr_table_int
+    # detect cycles in instr_table
+    def has_cycle(instr_table, visited, stack, node, after=True):
+        stack.append([to_old_indexes[node]])
+        visited.add(node)
+        for neighbor in instr_table[node]:
+            if neighbor.any or not neighbor.instr_type or (neighbor.intervals[0] != (-float("inf"), -1) if after else neighbor.intervals[-1] != (1, float("inf"))):
+                continue
+            for target in neighbor.numbers:
+                stack[-1][1:] = neighbor.path
+                if target not in visited:
+                    if has_cycle(instr_table, visited, stack, target, after):
+                        return True
+                elif any(target == k[0] for k in stack):
+                    return True
+        stack.pop()
+        return False
+    for p in [0, 1]:
+        visited = set()
+        stack = []
+        for i in range(len(instr_table)):
+            if has_cycle(instr_table, visited, stack, i, p):
+                errors.append(f"Cycle detected: {(' after ' if p else ' before ').join(['->'.join([str(x) for x in k]) for k in stack])}")
+                return table_original
     sorter = EfficientConstraintSorter(alph[:len(valid_row_indexes)])
     go(alph, instr_table, sorter)
     for cat, rows in attributes.items():
@@ -821,6 +896,7 @@ def sorter(table_original, errors, warnings):
 
     # Solve the problem
     print("Solving constraint-based sorting problem...")
+    ortools_loaded.wait(timeout=30)
     solution = sorter.solve(time_limit=30000)
     
     if not solution:
@@ -859,6 +935,7 @@ def sorter(table_original, errors, warnings):
 
 if __name__ == "__main__":
     try:
+        threading.Thread(target=preload_ortools, daemon=True).start()
         import pyperclip
         # clipboard_content = pyperclip.paste()
         with open('test.txt', 'r') as f:

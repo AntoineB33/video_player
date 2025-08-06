@@ -68,7 +68,12 @@ class EfficientConstraintSorter:
         
         # Handle optimization if required
         if self.maximize_distance:
-            return self._solve_lexicographic_ortools(model, position, time_limit_seconds)
+            result = self._solve_lexicographic_ortools(model, position, time_limit_seconds)
+            if result is None and self.last_violations:
+                print("Lexicographic optimization failed. Error details:")
+                for i, violation in enumerate(self.last_violations, 1):
+                    print(f"  {i}. {violation}")
+            return result
 
         status = solver.Solve(model)
 
@@ -234,8 +239,34 @@ class EfficientConstraintSorter:
                     pos = solver.Value(position[elem])
                     solution[pos] = elem
                 return solution
-            self.last_violations = [f"OR-Tools solver status: {solver.StatusName(status)}"]
+            elif status == cp_model.INFEASIBLE:
+                print("Base model is infeasible during lexicographic optimization. Finding conflicting constraints...")
+                self.last_violations = self._find_conflicting_constraints_ortools()
+                return None
+            else:
+                self.last_violations = [f"OR-Tools solver status: {solver.StatusName(status)}"]
+                return None
+
+        # First, check if the base constraints are feasible
+        print("Checking feasibility of base constraints...")
+        test_model = cp_model.CpModel()
+        test_position = {elem: test_model.NewIntVar(0, self.n - 1, f'pos_{elem}') for elem in self.elements}
+        test_model.AddAllDifferent([test_position[elem] for elem in self.elements])
+        self._add_constraints_to_model(test_model, test_position)
+        
+        test_solver = cp_model.CpSolver()
+        test_solver.parameters.max_time_in_seconds = min(30, time_limit_seconds / 10)  # Quick feasibility check
+        test_status = test_solver.Solve(test_model)
+        
+        if test_status == cp_model.INFEASIBLE:
+            print("Base constraints are infeasible. Finding conflicting constraints...")
+            self.last_violations = self._find_conflicting_constraints_ortools()
             return None
+        elif test_status != cp_model.OPTIMAL and test_status != cp_model.FEASIBLE:
+            self.last_violations = [f"Base constraints feasibility check failed: {test_solver.StatusName(test_status)}"]
+            return None
+        
+        print("Base constraints are feasible. Proceeding with optimization...")
 
         # Create the model
         model = cp_model.CpModel()
@@ -274,7 +305,20 @@ class EfficientConstraintSorter:
             model.Maximize(sorted_dist[j])
             status = solver.Solve(model)
             if status != cp_model.OPTIMAL and status != cp_model.FEASIBLE:
-                self.last_violations = [f"Failed to maximize sorted_dist[{j}]: {solver.StatusName(status)}"]
+                if status == cp_model.INFEASIBLE:
+                    print(f"Model became infeasible while maximizing sorted_dist[{j}]. This suggests the optimization constraints conflict with base constraints.")
+                    # Try to find conflicts in the optimization model
+                    print("Attempting to find conflicting constraints in optimization model...")
+                    self.last_violations = [f"Optimization became infeasible at step {j+1}/{k}. The lexicographic optimization constraints may be too restrictive."]
+                    # Additional diagnostic info
+                    if j > 0:
+                        self.last_violations.append(f"Successfully optimized {j} distance(s) with values: {optimal_values}")
+                        self.last_violations.append("This suggests the conflict arises from the combination of:")
+                        self.last_violations.append("1. Base positioning constraints")
+                        self.last_violations.append("2. Distance maximization requirements")
+                        self.last_violations.append(f"3. Previously fixed distance constraints: sorted_dist[0..{j-1}] >= {optimal_values}")
+                else:
+                    self.last_violations = [f"Failed to maximize sorted_dist[{j}]: {solver.StatusName(status)}"]
                 return None
             s_j = solver.Value(sorted_dist[j])
             optimal_values.append(s_j)
@@ -503,7 +547,7 @@ def test_solvers():
     sorter.add_forbidden_constraint("elem_0", "elem_3", [(1, float('inf'))])
     sorter.add_forbidden_constraint("elem_2", "elem_3", [(1, float('inf'))])
     sorter.add_forbidden_constraint("elem_2", "elem_3", [(-float('inf'), -3)])
-    sorter.add_forbidden_constraint("elem_5", "elem_6", [(-float('inf'), -1)])
+    sorter.add_forbidden_constraint("elem_5", "elem_6", [(-float('inf'), -2)])
     sorter.add_forbidden_constraint("elem_5", "elem_6", [(1, float('inf'))])
     sorter.add_group_maximize({0, 2, 3, 5, 6})
     

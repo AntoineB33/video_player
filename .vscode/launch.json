@@ -1,0 +1,12 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Run generate_sortings.py",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/generate_sortings.py",
+            "console": "integratedTerminal"
+        }
+    ]
+}
