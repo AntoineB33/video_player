@@ -162,7 +162,7 @@ class EfficientConstraintSorter:
         
         return ["Solver found the model feasible during conflict analysis, which is unexpected."]
 
-    def _add_single_ortools_constraint(self, model, position, constraint_data, enforce_if: Optional[cp_model.BoolVarT] = None):
+    def _add_single_ortools_constraint(self, model, position, constraint_data, enforce_if = None):
         """Helper to add one constraint to an OR-Tools model, potentially guarded by a literal."""
         c_type = constraint_data['type']
         data = constraint_data['data']
@@ -897,7 +897,7 @@ def sorter(table_original, errors, warnings):
     # Solve the problem
     print("Solving constraint-based sorting problem...")
     ortools_loaded.wait(timeout=30)
-    solution = sorter.solve(time_limit=30000)
+    solution = sorter.solve(time_limit=300000000000)
     
     if not solution:
         errors.append("No valid solution found!")
@@ -937,9 +937,9 @@ if __name__ == "__main__":
     try:
         threading.Thread(target=preload_ortools, daemon=True).start()
         import pyperclip
-        # clipboard_content = pyperclip.paste()
-        with open('test.txt', 'r') as f:
-            clipboard_content = f.read()
+        clipboard_content = pyperclip.paste()
+        # with open('data/test.txt', 'r') as f:
+        #     clipboard_content = f.read()
         table = [line.split('\t') for line in re.split(r'\r?\n', clipboard_content)]
         crop_line = len(table)
         crop_column = len(table[0])
