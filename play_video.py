@@ -3,6 +3,7 @@ import sys
 import ctypes
 from encrypt import get_playlist_status
 from config import DECRYPTED_MEDIA_PATH, PLAYLISTS_PATH, DEFAULT_PLAYLIST_FILE
+import pickle
 
 # Set path to directory containing libvlc.dll
 libvlc_dir = os.path.dirname(os.path.abspath(__file__))
@@ -236,59 +237,6 @@ class FullscreenPlayerWithMuting(FullscreenPlayer):
 # Usage example:
 # To use the muting version, replace FullscreenPlayer with FullscreenPlayerWithMuting
 # player = FullscreenPlayerWithMuting(root, playlist)
-# Alternative approach: Mute during seeking
-class FullscreenPlayerWithMuting(FullscreenPlayer):
-    """Alternative implementation that mutes audio during seeking"""
-    
-    def __init__(self, master, playlist):
-        super().__init__(master, playlist)
-        self.original_volume = 100
-        self.mute_timer = None
-    
-    def perform_seek(self, offset_ms):
-        """Seek with temporary audio muting"""
-        # Store original volume and mute
-        self.original_volume = self.player.audio_get_volume()
-        self.player.audio_set_volume(0)
-        
-        # Perform the seek
-        current_time = self.player.get_time()
-        target_time = max(0, current_time + offset_ms)
-        self.player.set_time(target_time)
-        
-        # Cancel any existing timer
-        if self.mute_timer:
-            self.mute_timer.cancel()
-        
-        # Restore audio after a short delay
-        self.mute_timer = threading.Timer(0.3, self.restore_audio)
-        self.mute_timer.start()
-    
-    def restore_audio(self):
-        """Restore audio volume after seeking"""
-        self.player.audio_set_volume(self.original_volume)
-        self.mute_timer = None
-    
-    def seek_to_percentage(self, ratio):
-        """Jump to percentage with muting"""
-        # Store original volume and mute
-        self.original_volume = self.player.audio_get_volume()
-        self.player.audio_set_volume(0)
-        
-        # Perform the seek
-        self.player.set_position(ratio)
-        
-        # Cancel any existing timer
-        if self.mute_timer:
-            self.mute_timer.cancel()
-        
-        # Restore audio after a longer delay for percentage jumps
-        self.mute_timer = threading.Timer(0.5, self.restore_audio)
-        self.mute_timer.start()
-
-# Usage example:
-# To use the muting version, replace FullscreenPlayer with FullscreenPlayerWithMuting
-# player = FullscreenPlayerWithMuting(root, playlist)
 
 # --- Entry Point ---
 if __name__ == "__main__":
@@ -300,8 +248,9 @@ if __name__ == "__main__":
             messagebox.showerror("Error", "No valid media found in playlist!")
             sys.exit(1)
         playlist = [os.path.join(DECRYPTED_MEDIA_PATH, video) for video in playlist["media"]]
-        with open(DEFAULT_PLAYLIST_FILE, "w") as f:
-            f.write(playlist_name)
+        # Use pickle to save default playlist name
+        with open(DEFAULT_PLAYLIST_FILE, "wb") as f:
+            pickle.dump(playlist_name, f)
         root = tk.Tk()
         app = FullscreenPlayer(root, playlist)
         root.mainloop()

@@ -1,6 +1,7 @@
 from cryptography.fernet import Fernet
 from pathlib import Path
 import os
+import pickle
 from url_to_filename import url_to_filename, filename_to_url
 from config import KEY_PATH, PLAYLISTS_PATH, DEFAULT_PLAYLIST_FILE, ENCRYPTED_MEDIA_PATH, DECRYPTED_MEDIA_PATH
 
@@ -53,10 +54,13 @@ def get_playlist_status():
     print("available playlists:")
     all_playlists = [f for f in os.listdir(PLAYLISTS_PATH) if f.endswith(".txt")]
     default_playlist = None
-    with open(DEFAULT_PLAYLIST_FILE, "r") as f:
-        default_playlist = f.read().strip()
-        if default_playlist not in all_playlists:
-            default_playlist = None
+    # Use pickle to load default playlist name
+    if os.path.exists(DEFAULT_PLAYLIST_FILE):
+        with open(DEFAULT_PLAYLIST_FILE, "rb") as f:
+            try:
+                default_playlist = pickle.load(f)
+            except Exception:
+                default_playlist = None
 
     playlists = {}
     playlist_infos = []
@@ -114,8 +118,9 @@ if __name__ == "__main__":
         playlist = playlists.get(playlist_name, [])
         if not playlist:
             raise ValueError("No valid media found in playlist!")
-        with open(DEFAULT_PLAYLIST_FILE, "w") as f:
-            f.write(playlist_name)
+        # Use pickle to save default playlist name
+        with open(DEFAULT_PLAYLIST_FILE, "wb") as f:
+            pickle.dump(playlist_name, f)
         # decrypt all files in the playlist
         for medium in playlist["not_decrypted"]:
             try:
