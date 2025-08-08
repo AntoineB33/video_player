@@ -1,4 +1,4 @@
-from data.config import ENCRYPTED_MEDIA_PATH, PLAYLISTS_PATH
+from config import ENCRYPTED_MEDIA_PATH, PLAYLISTS_PATH
 import os
 from url_to_filename import filename_to_url
 

@@ -5,7 +5,7 @@ import re
 import sys
 from url_to_filename import url_to_filename
 from encrypt import encrypt_file
-from data.config import ENCRYPTED_MEDIA_PATH
+from config import ENCRYPTED_MEDIA_PATH
 
 # === CONFIGURATION ===
 destination_folder = ENCRYPTED_MEDIA_PATH  # Use config

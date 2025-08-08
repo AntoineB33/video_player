@@ -5,7 +5,7 @@ import itertools
 import string
 from z3 import *
 import threading
-from data.config import PLAYLISTS_PATH
+from config import PLAYLISTS_PATH
 
 ROLES = ['path', 'names', 'attributes', 'dependencies', 'sprawl']
 PATTERN_DISTANCE = r'^(?P<prefix>as far as possible from )(?P<any>any)?((?P<number>\d+)|(?P<name>.+))(?P<suffix>)$'
