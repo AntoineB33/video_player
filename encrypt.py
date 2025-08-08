@@ -52,15 +52,13 @@ def files_with_same_stem(base: Path):
 def get_playlist_status():
     # --- Ask user for playlist name via CMD ---
     print("available playlists:")
+    os.makedirs(PLAYLISTS_PATH, exist_ok=True)
     all_playlists = [f for f in os.listdir(PLAYLISTS_PATH) if f.endswith(".txt")]
-    default_playlist = None
-    # Use pickle to load default playlist name
-    if os.path.exists(DEFAULT_PLAYLIST_FILE):
-        with open(DEFAULT_PLAYLIST_FILE, "rb") as f:
-            try:
-                default_playlist = pickle.load(f)
-            except Exception:
-                default_playlist = None
+    if not os.path.exists(DEFAULT_PLAYLIST_FILE):
+        with open(DEFAULT_PLAYLIST_FILE, "wb") as f:
+            pickle.dump(None, f)
+    with open(DEFAULT_PLAYLIST_FILE, "rb") as f:
+        default_playlist = pickle.load(f)
 
     playlists = {}
     playlist_infos = []

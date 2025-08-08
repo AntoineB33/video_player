@@ -5,7 +5,9 @@ import itertools
 import string
 from z3 import *
 import threading
-from config import PLAYLISTS_PATH
+import pickle
+import json
+from config import PLAYLISTS_PATH, DEFAULT_PLAYLIST_FILE
 
 ROLES = ['path', 'names', 'attributes', 'dependencies', 'sprawl']
 PATTERN_DISTANCE = r'^(?P<prefix>as far as possible from )(?P<any>any)?((?P<number>\d+)|(?P<name>.+))(?P<suffix>)$'
@@ -106,6 +108,39 @@ class EfficientConstraintSorter:
         # First, try to solve the model as is
         solver = cp_model.CpSolver()
         solver.parameters.max_time_in_seconds = time_limit_seconds
+
+        self.file_path = os.path.join(PLAYLISTS_PATH, self.table_original[0][0])
+        os.makedirs(PLAYLISTS_PATH, exist_ok=True)
+        if not os.path.exists(self.file_path):
+            with open(self.file_path, "wb") as f:
+                pickle.dump({
+                    "input": {
+                        "elements": [],
+                        "constraints": [],
+                        "maximize_distance": []
+                    }
+                }, f)
+        with open(self.file_path, "rb") as f:
+            prev_sorting = pickle.load(f)
+        new_sorting = {
+            "input": {
+                "elements": self.elements,
+                "constraints": self.constraints,
+                "maximize_distance": self.maximize_distance
+            },
+            "output": {
+                "sorting": [],
+                "step": 0,
+                "total_steps": 0
+            }
+        }
+        if prev_sorting["input"] == new_sorting["input"]:
+            if (prev_sorting["output"]["steps"] == prev_sorting["output"]["total_steps"] and
+                prev_sorting["output"]["total_steps"] > 0):
+                print("Using cached sorting from previous run.")
+                return prev_sorting["output"]["sorting"]
+        with open(self.file_path, "wb") as f:
+            pickle.dump(new_sorting, f)
         
         # Handle optimization if required
         if self.maximize_distance:
@@ -133,7 +168,11 @@ class EfficientConstraintSorter:
                 self.last_violations = self._find_conflicting_constraints_ortools()
             else:
                 self.last_violations = [f"OR-Tools solver status: {solver.StatusName(status)}"]
-            return [roles] + self.table_original
+            if result is None and self.last_violations:
+                print("Lexicographic optimization failed. Error details:")
+                for i, violation in enumerate(self.last_violations, 1):
+                    print(f"  {i}. {violation}")
+            return self.table_original
             
 
     def _find_conflicting_constraints_ortools(self) -> List[str]:
@@ -265,6 +304,27 @@ class EfficientConstraintSorter:
             if satisfied_options:
                 add(model.AddBoolOr(satisfied_options))
 
+    def _save_checkpoint(self, iteration, optimal_values, best_solution, timestamp):
+        checkpoint_dir = "data/optimization_checkpoints"
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        checkpoint_file = os.path.join(checkpoint_dir, f"checkpoint_{timestamp}.json")
+        
+        data = {
+            "iteration": iteration,
+            "optimal_values": optimal_values,
+            "best_solution": best_solution,
+            "elements": self.elements,
+            "timestamp": timestamp
+        }
+        with open(checkpoint_file, "w") as f:
+            json.dump(data, f, indent=2)
+        print(f"Checkpoint saved: {checkpoint_file}")
+        
+    def _load_checkpoint(self, checkpoint_file):
+        with open(checkpoint_file, "r") as f:
+            data = json.load(f)
+        return data
+    
     def _solve_lexicographic_ortools(self, base_model, position, time_limit_seconds):
         """Solve with lexicographic optimization: maximize distances in sorted order."""
         print("Starting lexicographic optimization with OR-Tools...")
@@ -966,7 +1026,7 @@ def sorter(table_original, errors, warnings):
             if has_cycle(instr_table, visited, stack, i, p):
                 errors.append(f"Cycle detected: {(' after ' if p else ' before ').join(['->'.join([str(x) for x in k]) for k in stack])}")
                 return table_original
-    sorter = EfficientConstraintSorter(alph[:len(valid_row_indexes)], instr_table, roles, path_index, errors, warnings, dep_pattern, path_index)
+    sorter = EfficientConstraintSorter(alph[:len(valid_row_indexes)], table_original, to_old_indexes, alph, cat_rows, attributes_table, dep_pattern, path_index)
     go(alph, instr_table, sorter)
     for cat, rows in attributes.items():
         category = [k for k, v in rows.items() if v[0]]
