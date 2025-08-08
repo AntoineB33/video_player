@@ -5,7 +5,7 @@ import itertools
 import string
 from z3 import *
 import threading
-from config import PLAYLISTS_PATH
+from data.config import PLAYLISTS_PATH
 
 ROLES = ['path', 'names', 'attributes', 'dependencies', 'sprawl']
 PATTERN_DISTANCE = r'^(?P<prefix>as far as possible from )(?P<any>any)?((?P<number>\d+)|(?P<name>.+))(?P<suffix>)$'
@@ -39,8 +39,15 @@ class instr_struct:
         ))
 
 class EfficientConstraintSorter:
-    def __init__(self, elements: List[str]):
+    def __init__(self, elements: List[str], table_original, to_old_indexes, alph, cat_rows, attributes_table, dep_pattern, path_index):
         self.elements = elements
+        self.table_original = table_original
+        self.to_old_indexes = to_old_indexes
+        self.alph = alph
+        self.cat_rows = cat_rows
+        self.attributes_table = attributes_table
+        self.dep_pattern = dep_pattern
+        self.path_index = path_index
         self.n = len(elements)
         self.element_to_idx = {name: i for i, name in enumerate(elements)}
         # Store original constraints with a unique ID for conflict reporting
@@ -116,14 +123,18 @@ class EfficientConstraintSorter:
             for elem in self.elements:
                 pos = solver.Value(position[elem])
                 solution[pos] = elem
+            if not self.maximize_distance:
+                self._save_incremental_solution(solution, 0, 0)
             return solution
-        elif status == cp_model.INFEASIBLE:
-            print("Model is infeasible. Finding conflicting constraints...")
-            self.last_violations = self._find_conflicting_constraints_ortools()
-            return None
         else:
-            self.last_violations = [f"OR-Tools solver status: {solver.StatusName(status)}"]
-            return None
+            self._save_incremental_solution(None, 0, 0)
+            if status == cp_model.INFEASIBLE:
+                print("Model is infeasible. Finding conflicting constraints...")
+                self.last_violations = self._find_conflicting_constraints_ortools()
+            else:
+                self.last_violations = [f"OR-Tools solver status: {solver.StatusName(status)}"]
+            return [roles] + self.table_original
+            
 
     def _find_conflicting_constraints_ortools(self) -> List[str]:
         """Uses assumptions to find a sufficient set of conflicting constraints (IIS)."""
@@ -329,35 +340,65 @@ class EfficientConstraintSorter:
             for j in range(k):
                 model.Add(sorted_dist[j] == dist[i]).OnlyEnforceIf(b[i][j])
 
-        # Sequential maximization
+        # Sequential maximization with incremental saving
         solver = cp_model.CpSolver()
         solver.parameters.max_time_in_seconds = time_limit_seconds / max(1, k)  # Distribute time
         optimal_values = []
+        best_solution = None
+        import os
+        import json
+        from datetime import datetime
 
+        # Create results directory if it doesn't exist
+        results_dir = "data/optimization_results"
+        os.makedirs(results_dir, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
         for j in range(k):
             print(f"Maximizing sorted distance {j + 1} of {k}...")
             model.Maximize(sorted_dist[j])
             status = solver.Solve(model)
+            
             if status != cp_model.OPTIMAL and status != cp_model.FEASIBLE:
                 if status == cp_model.INFEASIBLE:
                     print(f"Model became infeasible while maximizing sorted_dist[{j}]. This suggests the optimization constraints conflict with base constraints.")
-                    # Try to find conflicts in the optimization model
                     print("Attempting to find conflicting constraints in optimization model...")
                     self.last_violations = [f"Optimization became infeasible at step {j+1}/{k}. The lexicographic optimization constraints may be too restrictive."]
                     # Additional diagnostic info
                     if j > 0:
                         self.last_violations.append(f"Successfully optimized {j} distance(s) with values: {optimal_values}")
+                        self.last_violations.append(f"Best solution saved to: {results_dir}/solution_step_{j}_{timestamp}.txt")
                         self.last_violations.append("This suggests the conflict arises from the combination of:")
                         self.last_violations.append("1. Base positioning constraints")
                         self.last_violations.append("2. Distance maximization requirements")
                         self.last_violations.append(f"3. Previously fixed distance constraints: sorted_dist[0..{j-1}] >= {optimal_values}")
+                    else:
+                        self.last_violations.append("Failed on first optimization step - base constraints may be too restrictive for distance maximization.")
                 else:
+                    if best_solution is not None:
+                        print(f"Solver failed with status {solver.StatusName(status)}.")
                     self.last_violations = [f"Failed to maximize sorted_dist[{j}]: {solver.StatusName(status)}"]
-                return None
+                    if j > 0:
+                        self.last_violations.append(f"Best solution saved to: {results_dir}/solution_step_{j}_{timestamp}.txt")
+                
+                # Return the best solution we found, even if incomplete
+                return best_solution
+            
             s_j = solver.Value(sorted_dist[j])
             optimal_values.append(s_j)
+            
+            # Extract current solution
+            current_solution = [''] * self.n
+            for elem in self.elements:
+                pos = solver.Value(model_position[elem])
+                current_solution[pos] = elem
+            best_solution = current_solution
+            
+            # Save incremental result
+            self._save_incremental_solution(current_solution, j+1)
+            
             model.Add(sorted_dist[j] >= s_j)  # Fix this distance for subsequent steps
-            print(f"  sorted_dist[{j}] maximized to {s_j}")
+            print(f"  sorted_dist[{j}] maximized to {s_j} - solution saved")
 
         # Extract final solution
         solution = [''] * self.n
@@ -368,8 +409,46 @@ class EfficientConstraintSorter:
         # Report final distances
         actual_distances = [abs(solution.index(x) - solution.index(y)) for x, y in valid_pairs]
         print(f"Final distances: {sorted(actual_distances)}")
+        
         return solution
 
+    def _save_incremental_solution(self, solution, step, total_steps):
+        """Save an incremental solution to file with metadata."""
+        with open
+        if not solution:
+            errors.append("No valid solution found!")
+            return self.table_original
+        elif type(solution) is string:
+            errors.append(f"Error when sorting: {solution!r}")
+            return self.table_original
+        print(f"Solution found: {solution}")
+        
+        # Show positions for clarity
+        print("\nPositions:")
+        for i, elem in enumerate(solution):
+            print(f"Position {i}: {elem}")
+
+        res = [0] + [self.to_old_indexes[self.alph.index(elem)] for elem in solution]
+        i = 1
+        while i < len(res):
+            d = 0
+            while d < len(self.cat_rows):
+                e = self.cat_rows[d]
+                if e in self.attributes_table[res[i]]:
+                    res.insert(i, e)
+                    i += 1
+                    del self.cat_rows[d]
+                else:
+                    d += 1
+            i += 1
+        res.extend(self.cat_rows)
+        new_table = order_table(res, table, roles, self.dep_pattern)
+        with open(f'{PLAYLISTS_PATH}/{table[0][0]}.txt', 'w') as f:
+            for i in res[1:]:
+                if table[i][self.path_index]:
+                    f.write(f"{table[i][self.path_index]}\n")
+        return [roles] + new_table
+    
     def _add_constraints_to_model(self, model, position):
         """Helper method to add all original constraints to a model."""
         # Add forbidden constraints
@@ -887,7 +966,7 @@ def sorter(table_original, errors, warnings):
             if has_cycle(instr_table, visited, stack, i, p):
                 errors.append(f"Cycle detected: {(' after ' if p else ' before ').join(['->'.join([str(x) for x in k]) for k in stack])}")
                 return table_original
-    sorter = EfficientConstraintSorter(alph[:len(valid_row_indexes)])
+    sorter = EfficientConstraintSorter(alph[:len(valid_row_indexes)], instr_table, roles, path_index, errors, warnings, dep_pattern, path_index)
     go(alph, instr_table, sorter)
     for cat, rows in attributes.items():
         category = [k for k, v in rows.items() if v[0]]
@@ -897,49 +976,15 @@ def sorter(table_original, errors, warnings):
     # Solve the problem
     print("Solving constraint-based sorting problem...")
     ortools_loaded.wait(timeout=30)
-    solution = sorter.solve(time_limit=300000000000)
-    
-    if not solution:
-        errors.append("No valid solution found!")
-        return table_original
-    elif type(solution) is string:
-        errors.append(f"Error when sorting: {solution!r}")
-        return table_original
-    print(f"Solution found: {solution}")
-    
-    # Show positions for clarity
-    print("\nPositions:")
-    for i, elem in enumerate(solution):
-        print(f"Position {i}: {elem}")
-
-    res = [0] + [to_old_indexes[alph.index(elem)] for elem in solution]
-    i = 1
-    while i < len(res):
-        d = 0
-        while d < len(cat_rows):
-            e = cat_rows[d]
-            if e in attributes_table[res[i]]:
-                res.insert(i, e)
-                i += 1
-                del cat_rows[d]
-            else:
-                d += 1
-        i += 1
-    res.extend(cat_rows)
-    new_table = order_table(res, table, roles, dep_pattern)
-    with open(f'{PLAYLISTS_PATH}/{table[0][0]}.txt', 'w') as f:
-        for i in res[1:]:
-            if table[i][path_index]:
-                f.write(f"{table[i][path_index]}\n")
-    return [roles] + new_table
+    return sorter.solve(time_limit=300000000000)
 
 if __name__ == "__main__":
     try:
         threading.Thread(target=preload_ortools, daemon=True).start()
         import pyperclip
-        clipboard_content = pyperclip.paste()
-        # with open('data/test.txt', 'r') as f:
-        #     clipboard_content = f.read()
+        # clipboard_content = pyperclip.paste()
+        with open('data/test.txt', 'r') as f:
+            clipboard_content = f.read()
         table = [line.split('\t') for line in re.split(r'\r?\n', clipboard_content)]
         crop_line = len(table)
         crop_column = len(table[0])

@@ -2,7 +2,7 @@ from cryptography.fernet import Fernet
 from pathlib import Path
 import os
 from url_to_filename import url_to_filename, filename_to_url
-from config import KEY_PATH, PLAYLISTS_PATH, DEFAULT_PLAYLIST_FILE, ENCRYPTED_MEDIA_PATH, DECRYPTED_MEDIA_PATH
+from data.config import KEY_PATH, PLAYLISTS_PATH, DEFAULT_PLAYLIST_FILE, ENCRYPTED_MEDIA_PATH, DECRYPTED_MEDIA_PATH
 
 def load_key(key_path=KEY_PATH):
     return Path(key_path).read_bytes()

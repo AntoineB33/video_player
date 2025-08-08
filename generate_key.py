@@ -1,5 +1,5 @@
 from cryptography.fernet import Fernet
-from config import KEY_PATH
+from data.config import KEY_PATH
 
 if __name__ == "__main__":
     key = Fernet.generate_key()

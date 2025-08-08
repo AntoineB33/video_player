@@ -2,7 +2,7 @@ import os
 import sys
 import ctypes
 from encrypt import get_playlist_status
-from config import DECRYPTED_MEDIA_PATH, PLAYLISTS_PATH, DEFAULT_PLAYLIST_FILE
+from data.config import DECRYPTED_MEDIA_PATH, PLAYLISTS_PATH, DEFAULT_PLAYLIST_FILE
 
 # Set path to directory containing libvlc.dll
 libvlc_dir = os.path.dirname(os.path.abspath(__file__))
