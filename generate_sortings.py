@@ -14,6 +14,8 @@ PATTERN_DISTANCE = r'^(?P<prefix>as far as possible from )(?P<any>any)?((?P<numb
 PATTERN_AREAS = r'^(?P<prefix>.*\|)(?P<any>any)?((?P<number>\d+)|(?P<name>.+))(?P<suffix>\|.*)$'
 
 ortools_loaded = threading.Event()
+fst_row = None
+fst_col = None
 
 class instr_struct:
     def __init__(self, instr_type: int, any: bool, numbers: List[int], intervals: List[Tuple[int, int]], path: List[int] = []):
@@ -428,8 +430,12 @@ class EfficientConstraintSorter:
         saved["output"]["new_table"] = new_table
         with open(self.file_path, 'wb') as f:
             pickle.dump(saved, f)
+        global fst_row, fst_col
+        result = [fst_row, roles] + new_table
+        for i in range(len(result)):
+            result[i] = [fst_col[i]] + result[i]
         with open(self.file_path.replace(".pkl", "_table.txt"), 'w') as f:
-            f.write(new_table)
+            f.write('\n'.join(['\t'.join(row) for row in result]))
         return new_table
     
     def _add_constraints_to_model(self, model, position):
