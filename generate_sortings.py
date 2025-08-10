@@ -32,8 +32,7 @@ class instr_struct:
         return (self.is_constraint == other.is_constraint and
                 self.any == other.any and
                 sorted(self.numbers) == sorted(other.numbers) and
-                sorted(self.intervals) == sorted(other.intervals) and
-                sorted(self.path) == sorted(other.path))
+                sorted(self.intervals) == sorted(other.intervals))
 
     def __hash__(self):
         return hash((
@@ -369,6 +368,11 @@ class EfficientConstraintSorter:
             while d < len(self.cat_rows):
                 e = self.cat_rows[d]
                 if e in self.attributes_table[res[i]]:
+                    for s in self.attributes_table[e]:
+                        if s in self.cat_rows:
+                            res.insert(i, s)
+                            i += 1
+                            del self.cat_rows[self.cat_rows.index(s)]
                     res.insert(i, e)
                     i += 1
                     del self.cat_rows[d]
@@ -730,11 +734,16 @@ def sorter(table, roles, errors, warnings):
         return table
     for i, row in enumerate(table):
         for j, cell in enumerate(row):
-            cells = cell.split('; ')
+            cells = cell.split(';')
             for k, c in enumerate(cells):
                 cells[k] = c.strip()
                 if j != path_index:
                     cells[k] = cells[k].lower()
+                    if roles[j] == 'attributes' or roles[j] == 'sprawl':
+                        if cells[k].endswith("-fst"):
+                            cells[k] = cells[k][:-4].strip() + " -fst"
+                        elif cells[k].endswith("-lst"):
+                            cells[k] = cells[k][:-4].strip() + " -lst"
             row[j] = '; '.join(cells)
     for i, row in enumerate(table[1:]):
         cell = row[path_index]
@@ -753,8 +762,10 @@ def sorter(table, roles, errors, warnings):
                         return table
                     except ValueError:
                         pass
-                    if "_" in name or ":" in name or "|" in name:
-                        errors.append(f"Error in row {i}, column {alph[j]}: {name!r} contains invalid characters (_ : |)")
+                    if "_" in name or ":" in name or "|" in name or ("-" in name and not name.endswith("-fst") and not name.endswith("-lst")):
+                        errors.append(f"Error in row {i}, column {alph[j]}: {name!r} contains invalid characters (_ : | -)")
+                    if name in ["fst", "lst"]:
+                        errors.append(f"Error in row {i}, column {alph[j]}: {name!r} is a reserved name")
                     if name in names:
                         errors.append(f"Error in row {i}, column {alph[j]}: name {name!r} already exists in row {names[name]}")
                     names[name] = i
@@ -762,21 +773,32 @@ def sorter(table, roles, errors, warnings):
         return table
     attributes = {}
     first_element = None
+    last_element = None
+    fst_cat = {}
+    lst_cat = {}
     for i, row in enumerate(table[1:], start=1):
         for j, cell in enumerate(row):
             is_sprawl = roles[j] == 'sprawl'
             if roles[j] == 'attributes' or is_sprawl:
                 if not cell:
                     continue
+                new_cell_list = []
                 cell_list = cell.split('; ')
                 for instr in cell_list:
                     if not instr:
                         errors.append(f"Error in row {i}, column {alph[j]}: empty attribute name")
                         return table
-                    if is_fst := instr.endswith(" -fst"):
+                    if is_fst := instr.endswith("-fst"):
                         instr = instr[:-5]
                     elif instr == "fst":
                         first_element = i
+                    elif is_lst := instr.endswith("-lst"):
+                        instr = instr[:-5]
+                    elif instr == "lst":
+                        last_element = i
+                    elif "-fst" in instr:
+                        errors.append(f"Error in row {i}, column {alph[j]}: '-fst' is not at the end of {instr!r}")
+                        return table
                     try:
                         k = int(instr)
                         if k < 1 or k > len(table)-1:
@@ -795,22 +817,29 @@ def sorter(table, roles, errors, warnings):
                     else:
                         warnings.append(f"Redundant attribute {instr!r} in row {i}, column {alph[j]}")
                     if is_fst:
-                        attributes[k]["fst"] = i
-    instr_table = [[] for _ in range(len(table))]
-    for k, v in attributes.items():
-        if "fst" in v:
-            for i in v.keys():
-                instr_table[i].append(instr_struct(True, False, [v["fst"]], [(-float("inf"), -1)]))
-    if first_element is not None:
-        instr_table[first_element].append(instr_struct(True, False, [first_element], [(1, float("inf"))]))
+                        fst_cat[i] = k
+                    elif is_lst:
+                        lst_cat[i] = k
+                    new_cell_list.append(instr)
+                row[j] = '; '.join(new_cell_list)
     attributes = accumulate_dependencies(attributes)
+    urls = [(row[i], []) for i in range(len(table))]
+    for i, row in enumerate(table[1:], start=1):
+        if row[path_index] and i in attributes:
+            for k in attributes[i].keys():
+                if urls[k][0]:
+                    errors.append(f"Error in row {i}, column {alph[path_index]}: a URL given by {' -> '.join([str(x) for x in urls[i][1]])} conflicts with another given by {' -> '.join([str(x) for x in attributes[i][k][1]])}")
+                    return table
+                urls[k] = (row[path_index], attributes[i][k][1])
     valid_row_indexes = []
+    is_valid = [False] * len(table)
     new_indexes = list(range(len(table)))
     to_old_indexes = []
     cat_rows = []
     new_index = 0
     for i, row in enumerate(table[1:], start=1):
         if row[path_index]:
+            is_valid[i] = True
             valid_row_indexes.append(i)
             new_indexes[i] = new_index
             new_index += 1
@@ -820,6 +849,7 @@ def sorter(table, roles, errors, warnings):
     if not valid_row_indexes:
         errors.append("Error: No valid rows found in the table!")
         return table
+
     for cat in list(attributes.keys()):
         if type(cat) is not int:
             continue
@@ -830,6 +860,27 @@ def sorter(table, roles, errors, warnings):
     for attr, deps in attributes.items():
         for dep in deps:
             attributes_table[dep].add(attr)
+    instr_table = [[] for _ in range(len(table))]
+    for k, v in fst_cat.items():
+        if is_valid[k]:
+            t = v
+            while fst_cat[t]:
+                t = fst_cat[t]
+            for i in attributes[t].keys():
+                instr_table[i].append(instr_struct(True, False, [new_indexes[k]], [(-float("inf"), -1)]))
+    for k, v in lst_cat.items():
+        if is_valid[k]:
+            t = v
+            while lst_cat[t]:
+                t = lst_cat[t]
+            for i in attributes[t].keys():
+                instr_table[i].append(instr_struct(True, False, [new_indexes[k]], [(1, float("inf"))]))
+    if first_element is not None:
+        for i in valid_row_indexes:
+            instr_table[i].append(instr_struct(True, False, [new_indexes[first_element]], [(-float("inf"), -1)]))
+    if last_element is not None:
+        for i in valid_row_indexes:
+            instr_table[i].append(instr_struct(True, False, [new_indexes[last_element]], [(1, float("inf"))]))
     dep_pattern = [cell.split('.') for cell in table[0]]
     for i, row in enumerate(table[1:], start=1):
         if not table[i][path_index] and i not in attributes:
@@ -890,7 +941,7 @@ def sorter(table, roles, errors, warnings):
                         warnings.append(f"Redundant instruction {x!r} in row {i}, column {alph[j]} given by {' -> '.join([str(x) for x in attributes[j][i][1] + x.path])}")
     instr_table_int = []
     for i in valid_row_indexes:
-        instr_table_int.append(instr_table[i])
+        instr_table_int.append(list(set(instr_table[i])))
     instr_table = instr_table_int
     # detect cycles in instr_table
     def has_cycle(instr_table, visited, stack, node, after=True):
