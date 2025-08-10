@@ -7,6 +7,7 @@ from z3 import *
 import threading
 import pickle
 import json
+import time
 from config import PLAYLISTS_PATH, DEFAULT_PLAYLIST_FILE
 
 ROLES = ['path', 'names', 'attributes', 'dependencies', 'sprawl']
@@ -18,8 +19,8 @@ fst_row = None
 fst_col = None
 
 class instr_struct:
-    def __init__(self, instr_type: int, any: bool, numbers: List[int], intervals: List[Tuple[int, int]], path: List[int] = []):
-        self.instr_type = instr_type
+    def __init__(self, is_constraint: int, any: bool, numbers: List[int], intervals: List[Tuple[int, int]], path: List[int] = []):
+        self.is_constraint = is_constraint
         self.any = any
         self.numbers = numbers
         self.intervals = intervals
@@ -28,7 +29,7 @@ class instr_struct:
     def __eq__(self, other):
         if not isinstance(other, instr_struct):
             return False
-        return (self.instr_type == other.instr_type and
+        return (self.is_constraint == other.is_constraint and
                 self.any == other.any and
                 sorted(self.numbers) == sorted(other.numbers) and
                 sorted(self.intervals) == sorted(other.intervals) and
@@ -36,7 +37,7 @@ class instr_struct:
 
     def __hash__(self):
         return hash((
-            self.instr_type,
+            self.is_constraint,
             self.any,
             tuple(sorted(self.numbers)),
             tuple(sorted(self.intervals))
@@ -145,7 +146,7 @@ class EfficientConstraintSorter:
         
         # Handle optimization if required
         if self.maximize_distance:
-            result = self._solve_lexicographic_ortools(prev_sorting, time_limit_seconds)
+            result = self._solve_lexicographic_ortools(model, prev_sorting, position, time_limit_seconds)
             if result is None and self.last_violations:
                 print("Lexicographic optimization failed. Error details:")
                 for i, violation in enumerate(self.last_violations, 1):
@@ -307,97 +308,46 @@ class EfficientConstraintSorter:
             if satisfied_options:
                 add(model.AddBoolOr(satisfied_options))
 
-    def _solve_lexicographic_ortools(self, saved, time_limit_seconds):
-        """Solve with lexicographic optimization: maximize distances in sorted order."""
-        print("Starting lexicographic optimization with OR-Tools...")
-
-        # Create the model
-        model = cp_model.CpModel()
-        model_position = {elem: model.NewIntVar(0, self.n - 1, f'pos_{elem}') for elem in self.elements}
-        model.AddAllDifferent([model_position[elem] for elem in self.elements])
-        self._add_constraints_to_model(model, model_position)
-
-        # Define distance variables
-        dist = {}
-        for i, (x, y) in enumerate(self.maximize_distance):
-            dist[i] = model.NewIntVar(0, self.n - 1, f'dist_{x}_{y}')
-            model.AddAbsEquality(dist[i], model_position[x] - model_position[y])
-
-        # Define sorted distance variables
+    def _solve_lexicographic_ortools(self, model, saved, position, time_limit_seconds):
+        """Maximize the sum of all distances in maximize_distance."""
         k = len(self.maximize_distance)
-        sorted_dist = [model.NewIntVar(0, self.n - 1, f'sorted_dist_{j}') for j in range(k)]
-        for j in range(k - 1):
-            model.Add(sorted_dist[j] <= sorted_dist[j + 1])
+        start_time = time.time()
+        elapsed = time.time() - start_time
 
-        # Boolean variables to map dist[i] to sorted_dist[j]
-        b = [[model.NewBoolVar(f'b_{i}_{j}') for j in range(k)] for i in range(k)]
-        for i in range(k):
-            model.Add(sum(b[i][j] for j in range(k)) == 1)  # Each dist[i] maps to one sorted_dist[j]
-        for j in range(k):
-            model.Add(sum(b[i][j] for i in range(k)) == 1)  # Each sorted_dist[j] maps to one dist[i]
-        for i in range(k):
-            for j in range(k):
-                model.Add(sorted_dist[j] == dist[i]).OnlyEnforceIf(b[i][j])
+        # Create distance variables and constraints
+        dist_vars = []
+        for (x, y) in self.maximize_distance:
+            diff = model.NewIntVar(-self.n + 1, self.n - 1, f'diff_{x}_{y}')
+            model.Add(diff == position[x] - position[y])
+            dist = model.NewIntVar(0, self.n - 1, f'dist_{x}_{y}')
+            model.AddAbsEquality(dist, diff)
+            dist_vars.append(dist)
 
-        # Sequential maximization with incremental saving
+        total_dist = model.NewIntVar(0, k * (self.n - 1), 'total_dist')
+        model.Add(total_dist == sum(dist_vars))
+        model.Maximize(total_dist)
+
         solver = cp_model.CpSolver()
-        solver.parameters.max_time_in_seconds = time_limit_seconds / max(1, k)  # Distribute time
-        optimal_values = []
-        best_solution = None
+        solver.parameters.max_time_in_seconds = max(1, time_limit_seconds - elapsed)
+        status = solver.Solve(model)
 
-        if not saved["output"]:
-            saved["output"]["optimal_values"] = []
-        optimal_values = saved["output"]["optimal_values"]
-        start_iter = len(optimal_values)
-
-        # Re-apply previous fixed constraints if resuming
-        for idx, val in enumerate(optimal_values):
-            model.Add(sorted_dist[idx] >= val)
-
-        # Main loop
-        for j in range(start_iter, k):
-            print(f"Maximizing sorted distance {j+1} of {k}...")
-            model.Maximize(sorted_dist[j])
-            status = solver.Solve(model)
-            if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-                saved["output"]["error"] = f"Solver status: {solver.StatusName(status)}"
-                return best_solution
-
-            s_j = solver.Value(sorted_dist[j])
-            optimal_values.append(s_j)
-
-            current_solution = [''] * self.n
+        if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
+            solution = [''] * self.n
             for elem in self.elements:
-                pos = solver.Value(model_position[elem])
-                current_solution[pos] = elem
-            best_solution = current_solution
+                pos = solver.Value(position[elem])
+                solution[pos] = elem
 
-            # Report final distances
-            actual_distances = [abs(best_solution.index(x) - best_solution.index(y)) for x, y in self.maximize_distance]
-            print(f"Final distances: {sorted(actual_distances)}")
-
-            saved["output"]["optimal_values"] = optimal_values
-            saved["output"]["best_solution"] = best_solution
-            self._save_incremental_solution(saved)
-
-            model.Add(sorted_dist[j] >= s_j)
-            print(f"  sorted_dist[{j}] maximized to {s_j} - checkpoint saved")
-
-        # Extract final solution
-        solution = [''] * self.n
-        for elem in self.elements:
-            pos = solver.Value(model_position[elem])
-            solution[pos] = elem
-
-        # Report final distances
-        actual_distances = [abs(solution.index(x) - solution.index(y)) for x, y in self.maximize_distance]
-        print(f"Final distances: {sorted(actual_distances)}")
-
-        saved["output"]["done"] = True
-        saved["output"]["optimal_values"] = optimal_values
-        saved["output"]["best_solution"] = solution
-        self._save_incremental_solution(saved)
-        return solution
+            saved["output"]["done"] = True
+            # saved["output"]["optimal_values"] = optimal_values
+            saved["output"]["best_solution"] = solution
+            return self._save_incremental_solution(saved)
+        else:
+            if status == cp_model.INFEASIBLE:
+                self.last_violations = ["Unexpected infeasibility during optimization."]
+            else:
+                self.last_violations = [f"Optimization failed: {solver.StatusName(status)}"]
+            saved["output"]["error"] = self.last_violations
+            return self._save_incremental_solution(saved)
 
     def _save_incremental_solution(self, saved):
         """Save an incremental solution to file with metadata."""
@@ -686,7 +636,7 @@ def go(strings, instructions, sorter):
             for number in inst.numbers:
                 targets.append(strings[number])
             # Forbidden constraint
-            if inst.instr_type:
+            if inst.is_constraint:
                 if inst.any:
                     sorter.add_forbidden_constraint_any_y(current, targets, inst.intervals)
                 else:
@@ -811,6 +761,7 @@ def sorter(table, roles, errors, warnings):
     if errors:
         return table
     attributes = {}
+    first_element = None
     for i, row in enumerate(table[1:], start=1):
         for j, cell in enumerate(row):
             is_sprawl = roles[j] == 'sprawl'
@@ -822,6 +773,10 @@ def sorter(table, roles, errors, warnings):
                     if not instr:
                         errors.append(f"Error in row {i}, column {alph[j]}: empty attribute name")
                         return table
+                    if is_fst := instr.endswith(" -fst"):
+                        instr = instr[:-5]
+                    elif instr == "fst":
+                        first_element = i
                     try:
                         k = int(instr)
                         if k < 1 or k > len(table)-1:
@@ -839,6 +794,15 @@ def sorter(table, roles, errors, warnings):
                         attributes[k][i] = (is_sprawl, [k])
                     else:
                         warnings.append(f"Redundant attribute {instr!r} in row {i}, column {alph[j]}")
+                    if is_fst:
+                        attributes[k]["fst"] = i
+    instr_table = [[] for _ in range(len(table))]
+    for k, v in attributes.items():
+        if "fst" in v:
+            for i in v.keys():
+                instr_table[i].append(instr_struct(True, False, [v["fst"]], [(-float("inf"), -1)]))
+    if first_element is not None:
+        instr_table[first_element].append(instr_struct(True, False, [first_element], [(1, float("inf"))]))
     attributes = accumulate_dependencies(attributes)
     valid_row_indexes = []
     new_indexes = list(range(len(table)))
@@ -866,7 +830,6 @@ def sorter(table, roles, errors, warnings):
     for attr, deps in attributes.items():
         for dep in deps:
             attributes_table[dep].add(attr)
-    instr_table = [[] for _ in range(len(table))]
     dep_pattern = [cell.split('.') for cell in table[0]]
     for i, row in enumerate(table[1:], start=1):
         if not table[i][path_index] and i not in attributes:
@@ -884,7 +847,7 @@ def sorter(table, roles, errors, warnings):
                             instr = dep_pattern[j][0] + ''.join([instr_split[i]+dep_pattern[j][i+1] for i in range(len(instr_split))])
                         match = re.match(PATTERN_DISTANCE, instr)
                         intervals = []
-                        if instr_type := not match:
+                        if is_constraint := not match:
                             match = re.match(PATTERN_AREAS, instr)
                             if not match:
                                 errors.append(f"Error in row {i}, column {alph[j]}: {instr!r} does not match expected format")
@@ -915,7 +878,7 @@ def sorter(table, roles, errors, warnings):
                                 for r in attributes[names[name]].keys():
                                     numbers.append(r)
                         numbers = list(map(lambda x: new_indexes[x], numbers))
-                        instr_table[i].append(instr_struct(instr_type, match.group("any"), numbers, intervals))
+                        instr_table[i].append(instr_struct(is_constraint, match.group("any"), numbers, intervals))
     for i in valid_row_indexes:
         for j in attributes_table[i]:
             if type(j) is int:
@@ -934,7 +897,7 @@ def sorter(table, roles, errors, warnings):
         stack.append([to_old_indexes[node]])
         visited.add(node)
         for neighbor in instr_table[node]:
-            if neighbor.any or not neighbor.instr_type or (neighbor.intervals[0] != (-float("inf"), -1) if after else neighbor.intervals[-1] != (1, float("inf"))):
+            if neighbor.any or not neighbor.is_constraint or (neighbor.intervals[0] != (-float("inf"), -1) if after else neighbor.intervals[-1] != (1, float("inf"))):
                 continue
             for target in neighbor.numbers:
                 stack[-1][1:] = neighbor.path
