@@ -43,9 +43,10 @@ class instr_struct:
         ))
 
 class EfficientConstraintSorter:
-    def __init__(self, elements: List[str], table, to_old_indexes, alph, cat_rows, attributes_table, dep_pattern, errors, path_index):
+    def __init__(self, elements: List[str], table, urls, to_old_indexes, alph, cat_rows, attributes_table, dep_pattern, errors, path_index):
         self.elements = elements
         self.table = table
+        self.urls = urls
         self.to_old_indexes = to_old_indexes
         self.alph = alph
         self.cat_rows = cat_rows
@@ -156,11 +157,14 @@ class EfficientConstraintSorter:
 
         if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
             solution = [''] * self.n
-            for elem in self.elements:
+            new_urls = [''] * self.n
+            for i, elem in enumerate(self.elements):
                 pos = solver.Value(position[elem])
                 solution[pos] = elem
+                new_urls[pos] = self.urls[i]
             prev_sorting["output"]["done"] = True
             prev_sorting["output"]["best_solution"] = solution
+            prev_sorting["output"]["urls"] = new_urls
             self._save_incremental_solution(prev_sorting)
             return solution
         else:
@@ -332,13 +336,16 @@ class EfficientConstraintSorter:
 
         if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
             solution = [''] * self.n
-            for elem in self.elements:
+            new_urls = [''] * self.n
+            for i, elem in enumerate(self.elements):
                 pos = solver.Value(position[elem])
                 solution[pos] = elem
+                new_urls[pos] = self.urls[i]
 
             saved["output"]["done"] = True
             # saved["output"]["optimal_values"] = optimal_values
             saved["output"]["best_solution"] = solution
+            saved["output"]["urls"] = new_urls
             return self._save_incremental_solution(saved)
         else:
             if status == cp_model.INFEASIBLE:
@@ -966,7 +973,7 @@ def sorter(table, roles, errors, warnings):
             if has_cycle(instr_table, visited, stack, i, p):
                 errors.append(f"Cycle detected: {(' after ' if p else ' before ').join(['->'.join([str(x) for x in k]) for k in stack])}")
                 return table
-    sorter = EfficientConstraintSorter(alph[:len(valid_row_indexes)], table, to_old_indexes, alph, cat_rows, attributes_table, dep_pattern, errors, path_index)
+    sorter = EfficientConstraintSorter(alph[:len(valid_row_indexes)], table, urls, to_old_indexes, alph, cat_rows, attributes_table, dep_pattern, errors, path_index)
     go(alph, instr_table, sorter)
     for cat, rows in attributes.items():
         category = [k for k, v in rows.items() if v[0]]

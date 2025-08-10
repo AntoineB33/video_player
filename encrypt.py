@@ -29,13 +29,10 @@ def read_playlist(file_path):
     if not os.path.exists(file_path):
         input(f"Error: Playlist file does not exist: {file_path}")
         return []
-        
-    with open(file_path, 'r') as f:
-        return [
-            url_to_filename(line.strip())
-            for line in f.readlines()
-            if line.strip()
-        ]
+
+    with open(file_path, 'rb') as f:
+        saved = pickle.load(f)
+        return [url_to_filename(url) for url in saved.get("output", {}).get("urls", [])]
 
 def files_with_same_stem(base: Path):
     """
@@ -67,14 +64,8 @@ def get_playlist_status():
         if_default = default_playlist is not None and file == default_playlist
         if if_default:
             suffix = " (default)"
-        paths = read_playlist(os.path.join(PLAYLISTS_PATH, file))
+        paths = read_playlist(os.path.join(PLAYLISTS_PATH, file+".pkl"))
         playlists[file] = {"media":[], "not_decrypted": []}
-        with open(os.path.join(PLAYLISTS_PATH, file), 'r') as f:
-            media = [
-                line.strip()
-                for line in f.readlines()
-                if line.strip()
-            ]
         for i, path in enumerate(paths):
             path = Path(path)
             files_found = files_with_same_stem(Path(DECRYPTED_MEDIA_PATH) / path.name)
