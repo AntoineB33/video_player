@@ -32,7 +32,7 @@ def read_playlist(file_path):
 
     with open(file_path, 'rb') as f:
         saved = pickle.load(f)
-        return [url_to_filename(url) for url in saved.get("output", {}).get("urls", [])]
+        return [url_to_filename(url[0]) for url in saved.get("output", {}).get("urls", [])]
 
 def files_with_same_stem(base: Path):
     """
@@ -46,17 +46,22 @@ def files_with_same_stem(base: Path):
     matches = [p for p in parent.glob(f"{stem}.*") if p.is_file()]
     return matches
 
-def get_playlist_status():
+def get_playlist_status(ask_if_no_def = False):
     # --- Ask user for playlist name via CMD ---
     print("available playlists:")
     os.makedirs(PLAYLISTS_PATH, exist_ok=True)
-    all_playlists = [f for f in os.listdir(PLAYLISTS_PATH) if f.endswith(".txt")]
+    all_playlists = [f for f in os.listdir(PLAYLISTS_PATH) if f.endswith(".pkl")]
+    if not all_playlists:
+        print("No playlists found.")
+        return {}, ""
     if not os.path.exists(DEFAULT_PLAYLIST_FILE):
         with open(DEFAULT_PLAYLIST_FILE, "wb") as f:
             pickle.dump(None, f)
     with open(DEFAULT_PLAYLIST_FILE, "rb") as f:
         default_playlist = pickle.load(f)
-
+    
+    if ask_if_no_def and default_playlist is not None and default_playlist in all_playlists:
+        return {}, default_playlist
     playlists = {}
     playlist_infos = []
     for file in all_playlists:
@@ -64,21 +69,21 @@ def get_playlist_status():
         if_default = default_playlist is not None and file == default_playlist
         if if_default:
             suffix = " (default)"
-        paths = read_playlist(os.path.join(PLAYLISTS_PATH, file+".pkl"))
-        playlists[file] = {"media":[], "not_decrypted": []}
-        for i, path in enumerate(paths):
-            path = Path(path)
-            files_found = files_with_same_stem(Path(DECRYPTED_MEDIA_PATH) / path.name)
-            if files_found:
-                playlists[file]["media"].append(files_found[0])
-            else:
-                url = filename_to_url(path.name)
-                files_found = files_with_same_stem(Path(ENCRYPTED_MEDIA_PATH) / path.name)
+        if not ask_if_no_def:
+            paths = read_playlist(os.path.join(PLAYLISTS_PATH, file))
+            playlists[file] = {"media":[], "not_decrypted": []}
+            for i, path in enumerate(paths):
+                files_found = files_with_same_stem(Path(DECRYPTED_MEDIA_PATH) / path)
                 if files_found:
-                    playlists[file]["not_decrypted"].append(files_found[0])
-                    suffix += f"\n\t(medium {i + 1} not decrypted: {url})"
+                    playlists[file]["media"].append(files_found[0])
                 else:
-                    suffix += f"\n\t(medium {i + 1} missing: {url})"
+                    url = filename_to_url(path)
+                    files_found = files_with_same_stem(Path(ENCRYPTED_MEDIA_PATH) / path)
+                    if files_found:
+                        playlists[file]["not_decrypted"].append(files_found[0])
+                        suffix += f"\n\t(medium {i + 1} not decrypted: {url})"
+                    else:
+                        suffix += f"\n\t(medium {i + 1} missing: {url})"
         playlist_infos.append((file, suffix, if_default))
 
     for idx, (file, suffix, if_default) in enumerate(playlist_infos, 1):
@@ -91,8 +96,10 @@ def get_playlist_status():
         if 0 <= idx < len(playlist_infos):
             playlist_name = playlist_infos[idx][0]
     elif not selection:
-        if default_playlist is not None:
+        if default_playlist is not None and default_playlist in all_playlists:
             playlist_name = default_playlist
+        else:
+            playlist_name = all_playlists[0]
     else:
         playlist_name = selection
         if not playlist_name.endswith(".txt"):

@@ -123,7 +123,9 @@ class EfficientConstraintSorter:
                         "constraints": [],
                         "maximize_distance": []
                     },
-                    "output": {}
+                    "output": {
+                        "urls": self.urls
+                    }
                 }, f)
         with open(self.file_path, "rb") as f:
             prev_sorting = pickle.load(f)
@@ -144,15 +146,6 @@ class EfficientConstraintSorter:
         else:
             new_sorting["input"] = prev_sorting["input"]
         
-        # Handle optimization if required
-        if self.maximize_distance:
-            result = self._solve_lexicographic_ortools(model, prev_sorting, position, time_limit_seconds)
-            if result is None and self.last_violations:
-                print("Lexicographic optimization failed. Error details:")
-                for i, violation in enumerate(self.last_violations, 1):
-                    print(f"  {i}. {violation}")
-            return result
-
         status = solver.Solve(model)
 
         if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
@@ -162,10 +155,19 @@ class EfficientConstraintSorter:
                 pos = solver.Value(position[elem])
                 solution[pos] = elem
                 new_urls[pos] = self.urls[i]
-            prev_sorting["output"]["done"] = True
+            prev_sorting["output"]["done"] = not self.maximize_distance
             prev_sorting["output"]["best_solution"] = solution
             prev_sorting["output"]["urls"] = new_urls
             self._save_incremental_solution(prev_sorting)
+        
+            # Handle optimization if required
+            if self.maximize_distance:
+                result = self._solve_lexicographic_ortools(model, prev_sorting, position, time_limit_seconds)
+                if result is None and self.last_violations:
+                    print("Lexicographic optimization failed. Error details:")
+                    for i, violation in enumerate(self.last_violations, 1):
+                        print(f"  {i}. {violation}")
+                return result
             return solution
         else:
             if status == cp_model.INFEASIBLE:
@@ -179,8 +181,7 @@ class EfficientConstraintSorter:
                     print(f"  {i}. {violation}")
             prev_sorting["output"]["error"] = self.last_violations
             self._save_incremental_solution(prev_sorting)
-            return self.table
-            
+            return self.table     
 
     def _find_conflicting_constraints_ortools(self) -> List[str]:
         """Uses assumptions to find a sufficient set of conflicting constraints (IIS)."""
@@ -769,7 +770,8 @@ def sorter(table, roles, errors, warnings):
                         return table
                     except ValueError:
                         pass
-                    if "_" in name or ":" in name or "|" in name or ("-" in name and not name.endswith("-fst") and not name.endswith("-lst")):
+                    match = re.search(r" -(\w+)$", name)
+                    if "_" in name or ":" in name or "|" in name or (match and match.group(1) not in ["fst", "lst"]):
                         errors.append(f"Error in row {i}, column {alph[j]}: {name!r} contains invalid characters (_ : | -)")
                     if name in ["fst", "lst"]:
                         errors.append(f"Error in row {i}, column {alph[j]}: {name!r} is a reserved name")
@@ -830,7 +832,7 @@ def sorter(table, roles, errors, warnings):
                     new_cell_list.append(instr)
                 row[j] = '; '.join(new_cell_list)
     attributes = accumulate_dependencies(attributes)
-    urls = [(row[i], []) for i in range(len(table))]
+    urls = [(table[i][path_index], []) for i in range(len(table))]
     for i, row in enumerate(table[1:], start=1):
         if row[path_index] and i in attributes:
             for k in attributes[i].keys():
@@ -871,14 +873,14 @@ def sorter(table, roles, errors, warnings):
     for k, v in fst_cat.items():
         if is_valid[k]:
             t = v
-            while fst_cat[t]:
+            while t in fst_cat:
                 t = fst_cat[t]
             for i in attributes[t].keys():
                 instr_table[i].append(instr_struct(True, False, [new_indexes[k]], [(-float("inf"), -1)]))
     for k, v in lst_cat.items():
         if is_valid[k]:
             t = v
-            while lst_cat[t]:
+            while t in lst_cat:
                 t = lst_cat[t]
             for i in attributes[t].keys():
                 instr_table[i].append(instr_struct(True, False, [new_indexes[k]], [(1, float("inf"))]))
