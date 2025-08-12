@@ -393,9 +393,10 @@ class EfficientConstraintSorter:
         with open(self.file_path, 'wb') as f:
             pickle.dump(saved, f)
         global fst_row, fst_col
-        result = [fst_row, roles] + new_table
+        result = [roles] + new_table
         for i in range(len(result)):
             result[i] = [fst_col[i]] + result[i]
+        result.insert(0, fst_row)
         with open(self.file_path.replace(".pkl", "_table.txt"), 'w') as f:
             f.write('\n'.join(['\t'.join(row) for row in result]))
         return new_table
@@ -1007,8 +1008,8 @@ if __name__ == "__main__":
                 crop_column = j + 1
                 break
         fst_row = table[0]
-        fst_col = [row[0] for row in table]
         table = table[1:crop_line]
+        fst_col = [row[0] for row in table]
         for i in range(len(table)):
             table[i] = table[i][1:crop_column]
         warnings = []
@@ -1019,7 +1020,7 @@ if __name__ == "__main__":
             role = role.strip().lower()
             if role not in ROLES:
                 errors.append(f"Error: Invalid role {role!r} found in roles")
-                result = [roles] + table
+                result = table
                 break
             roles[i] = role
         else:
@@ -1032,9 +1033,10 @@ if __name__ == "__main__":
             print("Warnings found:")
             for warning in warnings:
                 print(f"- {warning}")
-        result = [fst_row, roles] + result
-        for i in range(len(result)):
+        result.insert(0, roles)
+        for i in range(len(fst_col)):
             result[i] = [fst_col[i]] + result[i]
+        result.insert(0, fst_row)
         new_clipboard_content = '\n'.join(['\t'.join(row) for row in result])
         pyperclip.copy(new_clipboard_content)
         input("Sorted table copied to clipboard. Press Enter to exit.")
