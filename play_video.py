@@ -88,7 +88,11 @@ class FullscreenPlayer:
         self.player.set_hwnd(self.video_frame.winfo_id())
 
         self.events = self.player.event_manager()
-        self.events.event_attach(vlc.EventType.MediaPlayerEndReached, self.next_video)
+        self.events.event_attach(
+            vlc.EventType.MediaPlayerEndReached,
+            lambda e: self.master.after(0, self.next_video)
+        )
+
         
         # Add event handlers for seeking
         self.events.event_attach(vlc.EventType.MediaPlayerSeekableChanged, self.on_seekable_changed)
