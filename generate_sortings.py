@@ -43,7 +43,7 @@ class instr_struct:
         ))
 
 class EfficientConstraintSorter:
-    def __init__(self, elements: List[str], table, urls, to_old_indexes, alph, cat_rows, attributes_table, dep_pattern, errors, path_index):
+    def __init__(self, elements: List[str], table, urls, to_old_indexes, alph, cat_rows, attributes_table, dep_pattern, errors, path_index, manual=False):
         self.elements = elements
         self.table = table
         self.urls = urls
@@ -54,6 +54,7 @@ class EfficientConstraintSorter:
         self.dep_pattern = dep_pattern
         self.errors = errors
         self.path_index = path_index
+        self.manual = manual
         self.n = len(elements)
         self.element_to_idx = {name: i for i, name in enumerate(elements)}
         # Store original constraints with a unique ID for conflict reporting
@@ -158,7 +159,7 @@ class EfficientConstraintSorter:
             prev_sorting["output"]["done"] = not self.maximize_distance
             prev_sorting["output"]["best_solution"] = solution
             prev_sorting["output"]["urls"] = new_urls
-            result = self._save_incremental_solution(prev_sorting)
+            result = self._save_incremental_solution(prev_sorting, self.manual)
         
             # Handle optimization if required
             if self.maximize_distance:
@@ -356,7 +357,7 @@ class EfficientConstraintSorter:
             saved["output"]["error"] = self.last_violations
             return self._save_incremental_solution(saved)
 
-    def _save_incremental_solution(self, saved):
+    def _save_incremental_solution(self, saved, in_pyperclip=False):
         """Save an incremental solution to file with metadata."""
         solution = saved["output"]["best_solution"]
         if not solution:
@@ -397,8 +398,11 @@ class EfficientConstraintSorter:
         for i in range(len(result)):
             result[i] = [fst_col[i]] + result[i]
         result.insert(0, fst_row)
+        for_pyperclip = '\n'.join(['\t'.join(row) for row in result])
+        if in_pyperclip:
+            pyperclip.copy(for_pyperclip)
         with open(self.file_path.replace(".pkl", "_table.txt"), 'w') as f:
-            f.write('\n'.join(['\t'.join(row) for row in result]))
+            f.write(for_pyperclip)
         return new_table
     
     def _add_constraints_to_model(self, model, position):
@@ -735,7 +739,7 @@ def accumulate_dependencies(graph):
         dfs(node, [])
     return result
 
-def sorter(table, roles, errors, warnings):
+def sorter(table, roles, errors, warnings, manual = False):
     alph = generate_unique_strings(max(len(roles), len(table)))
     path_index = roles.index('path') if 'path' in roles else -1
     if path_index == -1:
@@ -977,7 +981,7 @@ def sorter(table, roles, errors, warnings):
                 errors.append(f"Cycle detected: {(' after ' if p else ' before ').join(['->'.join([str(x) for x in k]) for k in stack])}")
                 return table
     urls = [urls[i][0] for i in valid_row_indexes]
-    sorter = EfficientConstraintSorter(alph[:len(valid_row_indexes)], table, urls, to_old_indexes, alph, cat_rows, attributes_table, dep_pattern, errors, path_index)
+    sorter = EfficientConstraintSorter(alph[:len(valid_row_indexes)], table, urls, to_old_indexes, alph, cat_rows, attributes_table, dep_pattern, errors, path_index, manual)
     go(alph, instr_table, sorter)
     for cat, rows in attributes.items():
         category = [k for k, v in rows.items() if v[0]]
@@ -1024,7 +1028,7 @@ if __name__ == "__main__":
                 break
             roles[i] = role
         else:
-            result = sorter(table, roles, errors, warnings)
+            result = sorter(table, roles, errors, warnings, True)
         if errors:
             print("Errors found:")
             for error in errors:

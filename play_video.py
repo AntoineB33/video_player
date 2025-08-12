@@ -5,6 +5,9 @@ from encrypt import get_playlist_status
 from config import DECRYPTED_MEDIA_PATH, PLAYLISTS_PATH, DEFAULT_PLAYLIST_FILE
 import pickle
 
+# --- NEW: Import pynput ---
+from pynput import keyboard
+
 # Set path to directory containing libvlc.dll
 libvlc_dir = os.path.dirname(os.path.abspath(__file__))
 os.add_dll_directory(libvlc_dir)  # Windows 10+
@@ -25,7 +28,7 @@ class FullscreenPlayer:
         self.master = master
         self.playlist = playlist
         self.playlist_index = 0
-        self.seeking = False  # Flag to track if we're currently seeking
+        self.seeking = False
         
         if not self.playlist:
             messagebox.showerror("Error", "Playlist is empty!")
@@ -37,41 +40,21 @@ class FullscreenPlayer:
         master.configure(bg='black')
         self.video_frame = tk.Frame(master, bg='black')
         self.video_frame.pack(fill=tk.BOTH, expand=True)
-        self.video_frame.bind("<Escape>", self.quit_player)
-        self.video_frame.bind("n", self.next_video)
-        self.video_frame.bind("p", self.prev_video)
-        self.video_frame.bind("<Right>", self.seek_forward)
-        self.video_frame.bind("<Left>", self.seek_backward)
-        for i in range(10):
-            self.video_frame.bind(str(i), lambda event, x=i: self.seek_to_percentage(x / 10.0))
         
-        # Hide cursor using Windows API
+        # --- REMOVED: All self.master.bind() calls are no longer needed ---
+
         self.hide_cursor()
         
-        master.update()  # Force update to ensure frame is created
+        master.update()
         master.focus_force()
 
-        # Improved VLC configuration options for better seeking
         vlc_options = [
-            "--no-osd",
-            "--no-video-title-show",
-            "--quiet",
-            "--no-embedded-video",
-            "--avcodec-hw=dxva2",
-            "--avcodec-fast",
-            "--sout-avcodec-strict=-2",
-            "--audio-desync=0",
-            "--audio-replay-gain-mode=none",
-            "--file-caching=300",
-            "--network-caching=300",
-            "--live-caching=300",
-            "--drop-late-frames",
-            "--skip-frames",
-            "--avcodec-skiploopfilter=4",
-            "--winrt-d3dcontext",
-            "--d3d11",
-            "--avcodec-threads=0",
-            "--verbose=0"
+            "--no-osd", "--no-video-title-show", "--quiet", "--no-embedded-video",
+            "--avcodec-hw=dxva2", "--avcodec-fast", "--sout-avcodec-strict=-2",
+            "--audio-desync=0", "--audio-replay-gain-mode=none", "--file-caching=300",
+            "--network-caching=300", "--live-caching=300", "--drop-late-frames",
+            "--skip-frames", "--avcodec-skiploopfilter=4", "--winrt-d3dcontext",
+            "--d3d11", "--avcodec-threads=0", "--verbose=0"
         ]
 
         self.instance = vlc.Instance(" ".join(vlc_options))
@@ -83,114 +66,109 @@ class FullscreenPlayer:
             vlc.EventType.MediaPlayerEndReached,
             lambda e: self.master.after(0, self.next_video)
         )
-        
-        # Add event handlers for seeking
         self.events.event_attach(vlc.EventType.MediaPlayerSeekableChanged, self.on_seekable_changed)
         self.events.event_attach(vlc.EventType.MediaPlayerPositionChanged, self.on_position_changed)
+        
+        # --- NEW: Setup and start the global keyboard listener ---
+        self.listener = keyboard.Listener(on_press=self.on_press)
+        self.listener.start()
 
         self.load_video()
     
-    def hide_cursor(self):
-        """Hide cursor using Windows API"""
+    # --- NEW: Global key press handler ---
+    def on_press(self, key):
         try:
-            # Get the window handle
+            # Handle character keys (for numbers 0-9)
+            if '0' <= key.char <= '9':
+                self.seek_to_percentage(int(key.char) / 10.0)
+            elif key.char == 'n':
+                self.next_video()
+            elif key.char == 'p':
+                self.prev_video()
+                
+        except AttributeError:
+            # Handle special keys (like arrow keys, escape, etc.)
+            if key == keyboard.Key.esc:
+                self.quit_player()
+            elif key == keyboard.Key.right:
+                self.seek_forward()
+            elif key == keyboard.Key.left:
+                self.seek_backward()
+
+    def hide_cursor(self):
+        try:
             hwnd = ctypes.windll.user32.GetParent(self.master.winfo_id())
-            
-            # Hide cursor using Windows API
             ctypes.windll.user32.ShowCursor(False)
-            
-            # Remove cursor style from window
             style = ctypes.windll.user32.GetWindowLongPtrW(hwnd, GWL_STYLE)
             ctypes.windll.user32.SetWindowLongPtrW(hwnd, GWL_STYLE, style & ~WS_CURSOR)
         except Exception as e:
             print(f"Error hiding cursor: {e}")
     
     def show_cursor(self):
-        """Show cursor using Windows API"""
         try:
-            # Get the window handle
             hwnd = ctypes.windll.user32.GetParent(self.master.winfo_id())
-            
-            # Show cursor using Windows API
             ctypes.windll.user32.ShowCursor(True)
-            
-            # Restore cursor style to window
             style = ctypes.windll.user32.GetWindowLongPtrW(hwnd, GWL_STYLE)
             ctypes.windll.user32.SetWindowLongPtrW(hwnd, GWL_STYLE, style | WS_CURSOR)
         except Exception as e:
             print(f"Error showing cursor: {e}")
     
     def on_seekable_changed(self, event):
-        """Handle when seeking capability changes"""
         pass
     
     def on_position_changed(self, event):
-        """Handle position changes - can be used to detect when seeking is complete"""
         if self.seeking:
-            # Small delay to ensure audio catches up
             threading.Timer(0.1, self.finish_seek).start()
     
     def finish_seek(self):
-        """Complete the seeking operation"""
         self.seeking = False
 
-    def seek_forward(self, event):
-        """Skip forward 5 seconds with improved sync"""
+    def seek_forward(self): # MODIFIED: Removed 'event' parameter
         if self.player.is_playing():
             self.perform_seek(5000)
 
-    def seek_backward(self, event):
-        """Skip backward 5 seconds with improved sync"""
+    def seek_backward(self): # MODIFIED: Removed 'event' parameter
         if self.player.is_playing():
             self.perform_seek(-5000)
 
     def perform_seek(self, offset_ms):
-        """Perform seeking with audio/video sync handling"""
         self.seeking = True
         current_time = self.player.get_time()
         target_time = max(0, current_time + offset_ms)
         self.player.set_time(target_time)
 
     def seek_to_percentage(self, ratio):
-        """Jump to a specific percentage of the video with better sync"""
         if self.player.is_playing():
             self.seeking = True
             self.player.set_position(ratio)
 
     def load_video(self):
-        """Load and play the current video from the playlist"""
         if not 0 <= self.playlist_index < len(self.playlist):
             return
-            
         video_path = self.playlist[self.playlist_index]
         if not os.path.exists(video_path):
             messagebox.showwarning("File Missing", f"Video not found:\n{video_path}")
             return
-            
         media = self.instance.media_new(video_path)
         self.player.set_media(media)
         self.player.play()
-        
-        # Restore focus after a brief delay
-        self.master.after(100, lambda: self.video_frame.focus_force())
+        self.master.after(100, lambda: self.master.focus_force())
 
-    def next_video(self, event=None):
-        """Load the next video in the playlist"""
+    def next_video(self): # MODIFIED: Removed 'event' parameter
         if self.playlist_index < len(self.playlist) - 1:
             self.playlist_index += 1
             self.load_video()
-        else:
-            messagebox.showinfo("End", "End of playlist reached")
 
-    def prev_video(self, event=None):
-        """Load the previous video in the playlist"""
+    def prev_video(self): # MODIFIED: Removed 'event' parameter
         if self.playlist_index > 0:
             self.playlist_index -= 1
             self.load_video()
 
-    def quit_player(self, event=None):
+    def quit_player(self): # MODIFIED: Removed 'event' parameter
+        # --- NEW: Stop the listener for a clean exit ---
+        self.listener.stop()
         self.player.stop()
-        self.show_cursor()  # Restore cursor before exit
+        self.show_cursor()
         self.master.destroy()
 
 # --- Entry Point ---
