@@ -2,3 +2,4 @@ data/**
 **.dll
 plugins/**
 **.pyc
+config.py
