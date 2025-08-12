@@ -40,7 +40,8 @@ class FullscreenPlayer:
         self.video_frame.bind("<Left>", self.seek_backward)
         for i in range(10):
             self.video_frame.bind(str(i), lambda event, x=i: self.seek_to_percentage(x / 10.0))
-        self.video_frame.configure(cursor="none")
+        self.video_frame.config(cursor="none")
+        master.config(cursor="none")
 
         master.update()  # Force update to ensure frame is created
         master.focus_force()
@@ -166,7 +167,9 @@ class FullscreenPlayer:
         media = self.instance.media_new(video_path)
         self.player.set_media(media)
         self.player.play()
-        self.video_frame.focus_set()
+        
+        # Restore focus after a brief delay
+        self.master.after(100, lambda: self.video_frame.focus_force())
 
     def next_video(self, event=None):
         """Load the next video in the playlist"""
