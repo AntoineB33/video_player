@@ -16,6 +16,10 @@ import vlc
 import threading
 import time
 
+# Windows API constants
+GWL_STYLE = -16
+WS_CURSOR = 0x0001  # Cursor visibility flag
+
 class FullscreenPlayer:
     def __init__(self, master, playlist):
         self.master = master
@@ -40,9 +44,10 @@ class FullscreenPlayer:
         self.video_frame.bind("<Left>", self.seek_backward)
         for i in range(10):
             self.video_frame.bind(str(i), lambda event, x=i: self.seek_to_percentage(x / 10.0))
-        self.video_frame.config(cursor="none")
-        master.config(cursor="none")
-
+        
+        # Hide cursor using Windows API
+        self.hide_cursor()
+        
         master.update()  # Force update to ensure frame is created
         master.focus_force()
 
@@ -52,33 +57,21 @@ class FullscreenPlayer:
             "--no-video-title-show",
             "--quiet",
             "--no-embedded-video",
-            
-            # Hardware acceleration
             "--avcodec-hw=dxva2",
-            
-            # Seeking and sync improvements
-            "--avcodec-fast",              # Fast decoding for seeking
-            "--sout-avcodec-strict=-2",    # Allow experimental features
-            "--audio-desync=0",            # Reset audio desync
-            "--audio-replay-gain-mode=none", # Disable audio processing that can cause delays
-            
-            # Buffer and caching optimizations
-            "--file-caching=300",          # Reduce file caching (default 1000ms)
-            "--network-caching=300",       # Reduce network caching
-            "--live-caching=300",          # Reduce live stream caching
-            
-            # Frame handling
-            "--drop-late-frames",          # Drop frames that are too late
-            "--skip-frames",               # Allow frame skipping
-            "--avcodec-skiploopfilter=4",  # Skip loop filter for faster decoding
-            
-            # Video output optimizations
+            "--avcodec-fast",
+            "--sout-avcodec-strict=-2",
+            "--audio-desync=0",
+            "--audio-replay-gain-mode=none",
+            "--file-caching=300",
+            "--network-caching=300",
+            "--live-caching=300",
+            "--drop-late-frames",
+            "--skip-frames",
+            "--avcodec-skiploopfilter=4",
             "--winrt-d3dcontext",
             "--d3d11",
-            
-            # Seeking precision
-            "--avcodec-threads=0",         # Use all CPU cores for decoding
-            "--verbose=0"                  # Reduce logging overhead
+            "--avcodec-threads=0",
+            "--verbose=0"
         ]
 
         self.instance = vlc.Instance(" ".join(vlc_options))
@@ -90,13 +83,42 @@ class FullscreenPlayer:
             vlc.EventType.MediaPlayerEndReached,
             lambda e: self.master.after(0, self.next_video)
         )
-
         
         # Add event handlers for seeking
         self.events.event_attach(vlc.EventType.MediaPlayerSeekableChanged, self.on_seekable_changed)
         self.events.event_attach(vlc.EventType.MediaPlayerPositionChanged, self.on_position_changed)
 
         self.load_video()
+    
+    def hide_cursor(self):
+        """Hide cursor using Windows API"""
+        try:
+            # Get the window handle
+            hwnd = ctypes.windll.user32.GetParent(self.master.winfo_id())
+            
+            # Hide cursor using Windows API
+            ctypes.windll.user32.ShowCursor(False)
+            
+            # Remove cursor style from window
+            style = ctypes.windll.user32.GetWindowLongPtrW(hwnd, GWL_STYLE)
+            ctypes.windll.user32.SetWindowLongPtrW(hwnd, GWL_STYLE, style & ~WS_CURSOR)
+        except Exception as e:
+            print(f"Error hiding cursor: {e}")
+    
+    def show_cursor(self):
+        """Show cursor using Windows API"""
+        try:
+            # Get the window handle
+            hwnd = ctypes.windll.user32.GetParent(self.master.winfo_id())
+            
+            # Show cursor using Windows API
+            ctypes.windll.user32.ShowCursor(True)
+            
+            # Restore cursor style to window
+            style = ctypes.windll.user32.GetWindowLongPtrW(hwnd, GWL_STYLE)
+            ctypes.windll.user32.SetWindowLongPtrW(hwnd, GWL_STYLE, style | WS_CURSOR)
+        except Exception as e:
+            print(f"Error showing cursor: {e}")
     
     def on_seekable_changed(self, event):
         """Handle when seeking capability changes"""
@@ -127,32 +149,13 @@ class FullscreenPlayer:
         self.seeking = True
         current_time = self.player.get_time()
         target_time = max(0, current_time + offset_ms)
-        
-        # Method 1: Basic seeking with sync reset
         self.player.set_time(target_time)
-        
-        # Method 2: Alternative - pause/seek/play for better sync (uncomment to try)
-        # was_playing = self.player.is_playing()
-        # if was_playing:
-        #     self.player.pause()
-        # self.player.set_time(target_time)
-        # if was_playing:
-        #     # Small delay before resuming
-        #     threading.Timer(0.05, self.player.play).start()
 
     def seek_to_percentage(self, ratio):
         """Jump to a specific percentage of the video with better sync"""
         if self.player.is_playing():
             self.seeking = True
-            
-            # Method 1: Using set_position (often more accurate for large jumps)
             self.player.set_position(ratio)
-            
-            # Method 2: Alternative using time calculation (uncomment to try instead)
-            # total_duration = self.player.get_length()
-            # if total_duration > 0:
-            #     target_time = int(total_duration * ratio)
-            #     self.player.set_time(target_time)
 
     def load_video(self):
         """Load and play the current video from the playlist"""
@@ -187,67 +190,14 @@ class FullscreenPlayer:
 
     def quit_player(self, event=None):
         self.player.stop()
+        self.show_cursor()  # Restore cursor before exit
         self.master.destroy()
-
-# Alternative approach: Mute during seeking
-class FullscreenPlayerWithMuting(FullscreenPlayer):
-    """Alternative implementation that mutes audio during seeking"""
-    
-    def __init__(self, master, playlist):
-        super().__init__(master, playlist)
-        self.original_volume = 100
-        self.mute_timer = None
-    
-    def perform_seek(self, offset_ms):
-        """Seek with temporary audio muting"""
-        # Store original volume and mute
-        self.original_volume = self.player.audio_get_volume()
-        self.player.audio_set_volume(0)
-        
-        # Perform the seek
-        current_time = self.player.get_time()
-        target_time = max(0, current_time + offset_ms)
-        self.player.set_time(target_time)
-        
-        # Cancel any existing timer
-        if self.mute_timer:
-            self.mute_timer.cancel()
-        
-        # Restore audio after a short delay
-        self.mute_timer = threading.Timer(0.3, self.restore_audio)
-        self.mute_timer.start()
-    
-    def restore_audio(self):
-        """Restore audio volume after seeking"""
-        self.player.audio_set_volume(self.original_volume)
-        self.mute_timer = None
-    
-    def seek_to_percentage(self, ratio):
-        """Jump to percentage with muting"""
-        # Store original volume and mute
-        self.original_volume = self.player.audio_get_volume()
-        self.player.audio_set_volume(0)
-        
-        # Perform the seek
-        self.player.set_position(ratio)
-        
-        # Cancel any existing timer
-        if self.mute_timer:
-            self.mute_timer.cancel()
-        
-        # Restore audio after a longer delay for percentage jumps
-        self.mute_timer = threading.Timer(0.5, self.restore_audio)
-        self.mute_timer.start()
-
-# Usage example:
-# To use the muting version, replace FullscreenPlayer with FullscreenPlayerWithMuting
-# player = FullscreenPlayerWithMuting(root, playlist)
 
 # --- Entry Point ---
 if __name__ == "__main__":
-    playlists, playlist_name = get_playlist_status()
-    playlist_file = os.path.join(PLAYLISTS_PATH, playlist_name)
     try:
+        playlists, playlist_name = get_playlist_status()
+        playlist_file = os.path.join(PLAYLISTS_PATH, playlist_name)
         playlist = playlists.get(playlist_name, [])
         if not playlist:
             messagebox.showerror("Error", "No valid media found in playlist!")
@@ -261,3 +211,13 @@ if __name__ == "__main__":
         root.mainloop()
     except Exception as e:
         messagebox.showerror("Error", f"Unexpected error:\n{e}")
+    finally:
+        # Ensure cursor is restored even on error
+        try:
+            # Create a temporary window to safely show cursor
+            temp = tk.Tk()
+            temp.withdraw()
+            ctypes.windll.user32.ShowCursor(True)
+            temp.destroy()
+        except:
+            pass
