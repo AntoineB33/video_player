@@ -31,19 +31,16 @@ class FullscreenPlayer:
         master.attributes('-fullscreen', True)
         master.attributes('-topmost', True)
         master.configure(bg='black')
-        master.bind("<Escape>", self.quit_player)
-        # Replace number key bindings for navigation
-        master.bind("n", self.next_video)  # 'n' for next video
-        master.bind("p", self.prev_video)  # 'p' for previous video
-        master.bind("<Right>", self.seek_forward)
-        master.bind("<Left>", self.seek_backward)
-        
-        # Add bindings for percentage seeking (0-9 keys)
-        for i in range(10):
-            master.bind(str(i), lambda event, x=i: self.seek_to_percentage(x / 10.0))
-
         self.video_frame = tk.Frame(master, bg='black')
         self.video_frame.pack(fill=tk.BOTH, expand=True)
+        self.video_frame.bind("<Escape>", self.quit_player)
+        self.video_frame.bind("n", self.next_video)
+        self.video_frame.bind("p", self.prev_video)
+        self.video_frame.bind("<Right>", self.seek_forward)
+        self.video_frame.bind("<Left>", self.seek_backward)
+        for i in range(10):
+            self.video_frame.bind(str(i), lambda event, x=i: self.seek_to_percentage(x / 10.0))
+        self.video_frame.configure(cursor="none")
 
         master.update()  # Force update to ensure frame is created
         master.focus_force()
@@ -169,6 +166,7 @@ class FullscreenPlayer:
         media = self.instance.media_new(video_path)
         self.player.set_media(media)
         self.player.play()
+        self.video_frame.focus_set()
 
     def next_video(self, event=None):
         """Load the next video in the playlist"""
