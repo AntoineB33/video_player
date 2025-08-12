@@ -32,7 +32,7 @@ def read_playlist(file_path):
 
     with open(file_path, 'rb') as f:
         saved = pickle.load(f)
-        return [url_to_filename(url[0]) for url in saved.get("output", {}).get("urls", [])]
+        return [url_to_filename(url) for url in saved.get("output", {}).get("urls", [])]
 
 def files_with_same_stem(base: Path):
     """

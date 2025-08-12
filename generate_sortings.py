@@ -158,7 +158,7 @@ class EfficientConstraintSorter:
             prev_sorting["output"]["done"] = not self.maximize_distance
             prev_sorting["output"]["best_solution"] = solution
             prev_sorting["output"]["urls"] = new_urls
-            self._save_incremental_solution(prev_sorting)
+            result = self._save_incremental_solution(prev_sorting)
         
             # Handle optimization if required
             if self.maximize_distance:
@@ -168,7 +168,7 @@ class EfficientConstraintSorter:
                     for i, violation in enumerate(self.last_violations, 1):
                         print(f"  {i}. {violation}")
                 return result
-            return solution
+            return result
         else:
             if status == cp_model.INFEASIBLE:
                 print("Model is infeasible. Finding conflicting constraints...")
@@ -975,6 +975,7 @@ def sorter(table, roles, errors, warnings):
             if has_cycle(instr_table, visited, stack, i, p):
                 errors.append(f"Cycle detected: {(' after ' if p else ' before ').join(['->'.join([str(x) for x in k]) for k in stack])}")
                 return table
+    urls = [urls[i][0] for i in valid_row_indexes]
     sorter = EfficientConstraintSorter(alph[:len(valid_row_indexes)], table, urls, to_old_indexes, alph, cat_rows, attributes_table, dep_pattern, errors, path_index)
     go(alph, instr_table, sorter)
     for cat, rows in attributes.items():
