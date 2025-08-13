@@ -159,8 +159,7 @@ class EfficientConstraintSorter:
             prev_sorting["output"]["done"] = not self.maximize_distance
             prev_sorting["output"]["best_solution"] = solution
             prev_sorting["output"]["urls"] = new_urls
-            result = self._save_incremental_solution(prev_sorting, self.manual)
-        
+            result = self._save_incremental_solution(prev_sorting, self.manual and self.maximize_distance)
             # Handle optimization if required
             if self.maximize_distance:
                 result = self._solve_lexicographic_ortools(model, prev_sorting, position, time_limit_seconds)
