@@ -1,12 +1,11 @@
+from datetime import datetime
 import re
-import random
 from typing import List, Tuple, Set, Optional, Dict
 import itertools
 import string
 from z3 import *
 import threading
 import pickle
-import json
 import time
 from config import PLAYLISTS_PATH, DEFAULT_PLAYLIST_FILE
 
@@ -42,6 +41,7 @@ class instr_struct:
             tuple(sorted(self.intervals))
         ))
 
+        
 class EfficientConstraintSorter:
     def __init__(self, elements: List[str], table, urls, to_old_indexes, alph, cat_rows, attributes_table, dep_pattern, errors, path_index, manual=False):
         self.elements = elements
@@ -97,6 +97,31 @@ class EfficientConstraintSorter:
             return f"ID {constraint['id']}: REQUIRED pos({c_data['x']}) - pos(y) is valid for at least one y in {c_data['y_list']}"
         return f"ID {constraint['id']}: Unknown constraint type"
 
+    def _return_result(self, solver, prev_sorting, position, status):
+        if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
+            solution = [''] * self.n
+            new_urls = [''] * self.n
+            for i, elem in enumerate(self.elements):
+                pos = solver.Value(position[elem])
+                solution[pos] = elem
+                new_urls[pos] = self.urls[i]
+            prev_sorting["output"]["done"] = not self.maximize_distance
+            prev_sorting["output"]["best_solution"] = solution
+            prev_sorting["output"]["urls"] = new_urls
+            result = self._save_incremental_solution(prev_sorting, self.manual)
+            self.manual = False
+            return result
+        else:
+            if status == cp_model.INFEASIBLE:
+                print("Model is infeasible. Finding conflicting constraints...")
+                self.last_violations = self._find_conflicting_constraints_ortools()
+            else:
+                self.last_violations = [f"OR-Tools solver status: {solver.StatusName(status)}"]
+            for i, violation in enumerate(self.last_violations, 1):
+                print(f"  {i}. {violation}")
+            prev_sorting["output"]["error"] = self.last_violations
+            self._save_incremental_solution(prev_sorting)
+            return self.table
 
     ## OR-Tools Solver with Conflict Detection
     
@@ -136,7 +161,9 @@ class EfficientConstraintSorter:
                 "constraints": self.constraints,
                 "maximize_distance": self.maximize_distance
             },
-            "output": {}
+            "output": {
+                "best_solution": []
+            }
         }
         if prev_sorting["input"] == new_sorting["input"]:
             if prev_sorting["output"]["error"]:
@@ -148,40 +175,11 @@ class EfficientConstraintSorter:
             new_sorting["input"] = prev_sorting["input"]
         
         status = solver.Solve(model)
-
-        if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
-            solution = [''] * self.n
-            new_urls = [''] * self.n
-            for i, elem in enumerate(self.elements):
-                pos = solver.Value(position[elem])
-                solution[pos] = elem
-                new_urls[pos] = self.urls[i]
-            prev_sorting["output"]["done"] = not self.maximize_distance
-            prev_sorting["output"]["best_solution"] = solution
-            prev_sorting["output"]["urls"] = new_urls
-            result = self._save_incremental_solution(prev_sorting, self.manual and self.maximize_distance)
-            # Handle optimization if required
-            if self.maximize_distance:
-                result = self._solve_lexicographic_ortools(model, prev_sorting, position, time_limit_seconds)
-                if result is None and self.last_violations:
-                    print("Lexicographic optimization failed. Error details:")
-                    for i, violation in enumerate(self.last_violations, 1):
-                        print(f"  {i}. {violation}")
-                return result
-            return result
-        else:
-            if status == cp_model.INFEASIBLE:
-                print("Model is infeasible. Finding conflicting constraints...")
-                self.last_violations = self._find_conflicting_constraints_ortools()
-            else:
-                self.last_violations = [f"OR-Tools solver status: {solver.StatusName(status)}"]
-            if result is None and self.last_violations:
-                print("Lexicographic optimization failed. Error details:")
-                for i, violation in enumerate(self.last_violations, 1):
-                    print(f"  {i}. {violation}")
-            prev_sorting["output"]["error"] = self.last_violations
-            self._save_incremental_solution(prev_sorting)
-            return self.table     
+        result = self._return_result(solver, prev_sorting, position, status)
+        if self.maximize_distance:
+            solver, status = self._solve_lexicographic_ortools(model, prev_sorting, position, time_limit_seconds)
+            result = self._return_result(solver, prev_sorting, position, status)
+        return result
 
     def _find_conflicting_constraints_ortools(self) -> List[str]:
         """Uses assumptions to find a sufficient set of conflicting constraints (IIS)."""
@@ -333,75 +331,49 @@ class EfficientConstraintSorter:
 
         solver = cp_model.CpSolver()
         solver.parameters.max_time_in_seconds = max(1, time_limit_seconds - elapsed)
-        status = solver.Solve(model)
-
-        if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
-            solution = [''] * self.n
-            new_urls = [''] * self.n
-            for i, elem in enumerate(self.elements):
-                pos = solver.Value(position[elem])
-                solution[pos] = elem
-                new_urls[pos] = self.urls[i]
-
-            saved["output"]["done"] = True
-            # saved["output"]["optimal_values"] = optimal_values
-            saved["output"]["best_solution"] = solution
-            saved["output"]["urls"] = new_urls
-            return self._save_incremental_solution(saved)
-        else:
-            if status == cp_model.INFEASIBLE:
-                self.last_violations = ["Unexpected infeasibility during optimization."]
-            else:
-                self.last_violations = [f"Optimization failed: {solver.StatusName(status)}"]
-            saved["output"]["error"] = self.last_violations
-            return self._save_incremental_solution(saved)
+        progress_cb = ProgressCallback(self, saved, position, total_dist)
+        status = solver.SolveWithSolutionCallback(model, progress_cb)
+        return solver, status
 
     def _save_incremental_solution(self, saved, in_pyperclip=False):
         """Save an incremental solution to file with metadata."""
         solution = saved["output"]["best_solution"]
-        if not solution:
-            errors.append("No valid solution found!")
-            return self.table
-        print(f"Solution found: {solution}")
-        
-        # Show positions for clarity
-        print("\nPositions:")
-        for i, elem in enumerate(solution):
-            print(f"Position {i}: {elem}")
-
-        res = [0] + [self.to_old_indexes[self.alph.index(elem)] for elem in solution]
-        i = 1
-        while i < len(res):
-            d = 0
-            while d < len(self.cat_rows):
-                e = self.cat_rows[d]
-                if e in self.attributes_table[res[i]]:
-                    for s in self.attributes_table[e]:
-                        if s in self.cat_rows:
-                            res.insert(i, s)
-                            i += 1
-                            del self.cat_rows[self.cat_rows.index(s)]
-                    res.insert(i, e)
-                    i += 1
-                    del self.cat_rows[d]
-                else:
-                    d += 1
-            i += 1
-        res.extend(self.cat_rows)
-        new_table = order_table(res, self.table, roles, self.dep_pattern)
-        saved["output"]["new_table"] = new_table
+        if solution:
+            print(f"Solution found: {solution}")
+            self.cat_rows_copy = list(self.cat_rows)
+            res = [0] + [self.to_old_indexes[self.alph.index(elem)] for elem in solution]
+            i = 1
+            while i < len(res):
+                d = 0
+                while d < len(self.cat_rows_copy):
+                    e = self.cat_rows_copy[d]
+                    if e in self.attributes_table[res[i]]:
+                        for s in self.attributes_table[e]:
+                            if s in self.cat_rows_copy:
+                                res.insert(i, s)
+                                i += 1
+                                del self.cat_rows_copy[self.cat_rows_copy.index(s)]
+                        res.insert(i, e)
+                        i += 1
+                        del self.cat_rows_copy[d]
+                    else:
+                        d += 1
+                i += 1
+            res.extend(self.cat_rows_copy)
+            new_table = order_table(res, self.table, roles, self.dep_pattern)
+            saved["output"]["new_table"] = new_table
+            global fst_row, fst_col
+            result = [roles] + new_table
+            for i in range(len(result)):
+                result[i] = [fst_col[i]] + result[i]
+            result.insert(0, fst_row)
+            for_pyperclip = '\n'.join(['\t'.join(row) for row in result])
+            if in_pyperclip:
+                pyperclip.copy(for_pyperclip)
+            with open(self.file_path.replace(".pkl", "_table.txt"), 'w') as f:
+                f.write(for_pyperclip)
         with open(self.file_path, 'wb') as f:
             pickle.dump(saved, f)
-        global fst_row, fst_col
-        result = [roles] + new_table
-        for i in range(len(result)):
-            result[i] = [fst_col[i]] + result[i]
-        result.insert(0, fst_row)
-        for_pyperclip = '\n'.join(['\t'.join(row) for row in result])
-        if in_pyperclip:
-            pyperclip.copy(for_pyperclip)
-        with open(self.file_path.replace(".pkl", "_table.txt"), 'w') as f:
-            f.write(for_pyperclip)
         return new_table
     
     def _add_constraints_to_model(self, model, position):
@@ -572,10 +544,29 @@ class EfficientConstraintSorter:
             raise ValueError("Method must be 'ortools' or 'z3'")
 
 def preload_ortools():
-    global cp_model
+    global cp_model, ProgressCallback
     from ortools.sat.python import cp_model as _cp_model
     cp_model = _cp_model
+    class ProgressCallback(cp_model.CpSolverSolutionCallback):
+        def __init__(self, parent, saved, position, total_dist):
+            cp_model.CpSolverSolutionCallback.__init__(self)
+            self._parent = parent
+            self.saved = saved
+            self._position = position
+            self._total_dist = total_dist
+            self.best_dist = None
+
+        def OnSolutionCallback(self):
+            current_dist = self.Value(self._total_dist)
+
+            # Keep track of improvement
+            if self.best_dist is None or current_dist > self.best_dist:
+                self.best_dist = current_dist
+                self._parent._return_result(self, self.saved, self._position, cp_model.OPTIMAL)
+
+            print(f"Time: {datetime.now()}, Current best distance: {current_dist}")
     ortools_loaded.set()
+
 
 def get_intervals(interval_str):
     # First, parse the positions of intervals
