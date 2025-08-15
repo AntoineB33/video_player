@@ -1,5 +1,4 @@
 from config import ENCRYPTED_MEDIA_PATH, PLAYLISTS_PATH
-import os
 from encrypt import get_playlist_status
 
 

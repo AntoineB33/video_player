@@ -2,7 +2,7 @@ from cryptography.fernet import Fernet
 from pathlib import Path
 import os
 import pickle
-from url_to_filename import url_to_filename, filename_to_url
+from url_to_filename import filename_to_url
 from config import KEY_PATH, PLAYLISTS_PATH, DEFAULT_PLAYLIST_FILE, ENCRYPTED_MEDIA_PATH, DECRYPTED_MEDIA_PATH
 
 def load_key(key_path=KEY_PATH):
@@ -24,16 +24,6 @@ def decrypt_file(in_path, out_path, key_path=KEY_PATH):
     Path(out_path).write_bytes(data)
     os.remove(in_path)
 
-def read_playlist(file_path):
-    """Read medium paths from a text file"""
-    if not os.path.exists(file_path):
-        input(f"Error: Playlist file does not exist: {file_path}")
-        return []
-
-    with open(file_path, 'rb') as f:
-        saved = pickle.load(f)
-        return [url_to_filename(url) for url in saved.get("output", {}).get("urls", [])]
-
 def files_with_same_stem(base: Path):
     """
     Return all files in base.parent whose stem matches base.stem,
@@ -46,11 +36,14 @@ def files_with_same_stem(base: Path):
     matches = [p for p in parent.glob(f"{stem}.*") if p.is_file()]
     return matches
 
-def get_playlist_status(ask_if_no_def = False):
+def get_playlist_status(errors, ask_if_no_default = False, get_all_videos = False, get_all_new_table = False):
     # --- Ask user for playlist name via CMD ---
-    print("available playlists:")
+    if not get_all_videos:
+        print("available playlists:")
     os.makedirs(PLAYLISTS_PATH, exist_ok=True)
-    all_playlists = [f for f in os.listdir(PLAYLISTS_PATH) if f.endswith(".pkl")]
+    os.makedirs(DECRYPTED_MEDIA_PATH, exist_ok=True)
+    os.makedirs(ENCRYPTED_MEDIA_PATH, exist_ok=True)
+    all_playlists = [os.path.basename(f) for f in os.listdir(PLAYLISTS_PATH)]
     if not all_playlists:
         print("No playlists found.")
         return {}, ""
@@ -60,7 +53,7 @@ def get_playlist_status(ask_if_no_def = False):
     with open(DEFAULT_PLAYLIST_FILE, "rb") as f:
         default_playlist = pickle.load(f)
     
-    if ask_if_no_def and default_playlist is not None and default_playlist in all_playlists:
+    if ask_if_no_default and default_playlist is not None and default_playlist in all_playlists:
         return {}, default_playlist
     playlists = {}
     playlist_infos = []
@@ -69,9 +62,16 @@ def get_playlist_status(ask_if_no_def = False):
         if_default = default_playlist is not None and file == default_playlist
         if if_default:
             suffix = " (default)"
-        if not ask_if_no_def:
-            paths = read_playlist(os.path.join(PLAYLISTS_PATH, file))
+        if not ask_if_no_default:
             playlists[file] = {"media":[], "not_decrypted": []}
+            file_path = os.path.join(PLAYLISTS_PATH, file)
+            if not os.path.exists(file_path):
+                errors.append(f"Playlist file referenced but does not exist: {file_path}")
+                return
+            with open(file_path, 'rb') as f:
+                saved = pickle.load(f)
+                playlists[file].update(saved)
+            paths = playlists[file]["data"]["urls"]
             for i, path in enumerate(paths):
                 files_found = files_with_same_stem(Path(DECRYPTED_MEDIA_PATH) / path)
                 if files_found:
@@ -85,6 +85,9 @@ def get_playlist_status(ask_if_no_def = False):
                     else:
                         suffix += f"\n\t(medium {i + 1} missing: {url})"
         playlist_infos.append((file, suffix, if_default))
+
+    if get_all_videos:
+        return playlists, default_playlist
 
     for idx, (file, suffix, if_default) in enumerate(playlist_infos, 1):
         print(f"{idx}. {file}{suffix}")
@@ -101,10 +104,16 @@ def get_playlist_status(ask_if_no_def = False):
         else:
             playlist_name = all_playlists[0]
     else:
-        playlist_name = selection
-        if not playlist_name.endswith(".txt"):
-            playlist_name += ".txt"
-
+        if selection in all_playlists:
+            playlist_name = selection
+        else:
+            for file in all_playlists:
+                if file.startswith(selection):
+                    playlist_name = file
+                    break
+    if not playlist_name:
+        input("Error: No valid playlist selected!")
+        exit(1)
     return playlists, playlist_name
 
 if __name__ == "__main__":

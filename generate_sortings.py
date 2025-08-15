@@ -1,13 +1,16 @@
 from datetime import datetime
 import re
-from typing import List, Tuple, Set, Optional, Dict
+import sys
+from typing import List, Tuple, Set, Optional
 import itertools
 import string
-from z3 import *
+import os
+from z3 import Solver, Int, And, Distinct, Or, Bool, sat
 import threading
+import multiprocessing
 import pickle
 import time
-from config import PLAYLISTS_PATH, DEFAULT_PLAYLIST_FILE
+from config import PLAYLISTS_PATH
 
 ROLES = ['path', 'names', 'attributes', 'dependencies', 'sprawl']
 PATTERN_DISTANCE = r'^(?P<prefix>as far as possible from )(?P<any>any)?((?P<number>\d+)|(?P<name>.+))(?P<suffix>)$'
@@ -16,6 +19,8 @@ PATTERN_AREAS = r'^(?P<prefix>.*\|)(?P<any>any)?((?P<number>\d+)|(?P<name>.+))(?
 ortools_loaded = threading.Event()
 fst_row = None
 fst_col = None
+user_input = None
+stop_requested = False
 
 class instr_struct:
     def __init__(self, is_constraint: int, any: bool, numbers: List[int], intervals: List[Tuple[int, int]], path: List[int] = []):
@@ -40,23 +45,23 @@ class instr_struct:
             tuple(sorted(self.numbers)),
             tuple(sorted(self.intervals))
         ))
-
         
 class EfficientConstraintSorter:
-    def __init__(self, elements: List[str], table, urls, to_old_indexes, alph, cat_rows, attributes_table, dep_pattern, errors, path_index, manual=False):
-        self.elements = elements
-        self.table = table
-        self.urls = urls
-        self.to_old_indexes = to_old_indexes
-        self.alph = alph
-        self.cat_rows = cat_rows
-        self.attributes_table = attributes_table
-        self.dep_pattern = dep_pattern
+    def __init__(self, saved, errors, to_pyperclip):
+        self.saved = saved
+        self.elements = saved.get("data", {}).get("elements", [])
+        self.table = saved.get("input", {}).get("table", [])
+        self.urls = saved.get("data", {}).get("urls", [])
+        self.to_old_indexes = saved.get("data", {}).get("to_old_indexes", [])
+        self.cat_rows = saved.get("data", {}).get("cat_rows", [])
+        self.attributes_table = saved.get("data", {}).get("attributes_table", [])
+        self.roles = saved.get("data", {}).get("roles", [])
+        self.dep_pattern = saved.get("data", {}).get("dep_pattern", [])
         self.errors = errors
-        self.path_index = path_index
-        self.manual = manual
-        self.n = len(elements)
-        self.element_to_idx = {name: i for i, name in enumerate(elements)}
+        self.path_index = saved.get("data", {}).get("path_index", 0)
+        self.manual = to_pyperclip
+        self.n = len(self.elements)
+        self.element_to_idx = {name: i for i, name in enumerate(self.elements)}
         # Store original constraints with a unique ID for conflict reporting
         self.constraints = []
         self.next_constraint_id = 0
@@ -97,7 +102,7 @@ class EfficientConstraintSorter:
             return f"ID {constraint['id']}: REQUIRED pos({c_data['x']}) - pos(y) is valid for at least one y in {c_data['y_list']}"
         return f"ID {constraint['id']}: Unknown constraint type"
 
-    def _return_result(self, solver, prev_sorting, position, status):
+    def _return_result(self, solver, prev_sorting, position, status, to_pyperclip = False):
         if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
             solution = [''] * self.n
             new_urls = [''] * self.n
@@ -108,20 +113,15 @@ class EfficientConstraintSorter:
             prev_sorting["output"]["done"] = not self.maximize_distance
             prev_sorting["output"]["best_solution"] = solution
             prev_sorting["output"]["urls"] = new_urls
-            result = self._save_incremental_solution(prev_sorting, self.manual)
-            self.manual = False
-            return result
+            self._save_incremental_solution(prev_sorting, to_pyperclip)
         else:
             if status == cp_model.INFEASIBLE:
                 print("Model is infeasible. Finding conflicting constraints...")
-                self.last_violations = self._find_conflicting_constraints_ortools()
+                self.errors.append(self._find_conflicting_constraints_ortools())
             else:
-                self.last_violations = [f"OR-Tools solver status: {solver.StatusName(status)}"]
-            for i, violation in enumerate(self.last_violations, 1):
-                print(f"  {i}. {violation}")
-            prev_sorting["output"]["error"] = self.last_violations
-            self._save_incremental_solution(prev_sorting)
-            return self.table
+                self.errors.append(f"OR-Tools solver status: {solver.StatusName(status)}")
+            prev_sorting["output"]["error"] = self.errors
+            self._save_incremental_solution(prev_sorting, to_pyperclip)
 
     ## OR-Tools Solver with Conflict Detection
     
@@ -136,50 +136,34 @@ class EfficientConstraintSorter:
             self._add_single_ortools_constraint(model, position, constraint)
 
         # First, try to solve the model as is
-        solver = cp_model.CpSolver()
-        solver.parameters.max_time_in_seconds = time_limit_seconds
+        self.solver = cp_model.CpSolver()
+        self.solver.parameters.max_time_in_seconds = time_limit_seconds
 
         self.file_path = os.path.join(PLAYLISTS_PATH, self.table[0][0]+".pkl")
-        os.makedirs(PLAYLISTS_PATH, exist_ok=True)
-        if not os.path.exists(self.file_path):
-            with open(self.file_path, "wb") as f:
-                pickle.dump({
-                    "input": {
-                        "elements": [],
-                        "constraints": [],
-                        "maximize_distance": []
-                    },
-                    "output": {
-                        "urls": self.urls
-                    }
-                }, f)
-        with open(self.file_path, "rb") as f:
-            prev_sorting = pickle.load(f)
-        new_sorting = {
-            "input": {
-                "elements": self.elements,
-                "constraints": self.constraints,
-                "maximize_distance": self.maximize_distance
-            },
-            "output": {
-                "best_solution": []
-            }
-        }
-        if prev_sorting["input"] == new_sorting["input"]:
+        if os.path.exists(self.file_path):
+            with open(self.file_path, "rb") as f:
+                prev_sorting = pickle.load(f)
+        else:
+            prev_sorting = {"data": {}, "output": {"error": False}}
+        prev_sorting["input"] = self.saved["input"]
+        if prev_sorting["data"] == self.saved["data"]:
             if prev_sorting["output"]["error"]:
                 self.errors.append(prev_sorting["output"]["error"])
                 return self.table
             elif prev_sorting["output"]["done"]:
-                return prev_sorting["output"]["new_table"]
+                self._save_incremental_solution(prev_sorting, True)
         else:
-            new_sorting["input"] = prev_sorting["input"]
-        
-        status = solver.Solve(model)
-        result = self._return_result(solver, prev_sorting, position, status)
+            prev_sorting["data"] = self.saved["data"]
+
+        self.p = multiprocessing.Process(target=input_listener)
+        self.p.start()
+        status = self.solver.Solve(model)
+        self.p.terminate()
+        self.p.join()
+        self._return_result(self.solver, prev_sorting, position, status, True)
         if self.maximize_distance:
-            solver, status = self._solve_lexicographic_ortools(model, prev_sorting, position, time_limit_seconds)
-            result = self._return_result(solver, prev_sorting, position, status)
-        return result
+            status = self._solve_lexicographic_ortools(model, prev_sorting, position, time_limit_seconds)
+            self._return_result(self.solver, prev_sorting, position, status)
 
     def _find_conflicting_constraints_ortools(self) -> List[str]:
         """Uses assumptions to find a sufficient set of conflicting constraints (IIS)."""
@@ -201,11 +185,11 @@ class EfficientConstraintSorter:
             self._add_single_ortools_constraint(model, position, constraint, assumption_lit)
 
         model.AddAssumptions(assumptions)
-        solver = cp_model.CpSolver()
-        status = solver.Solve(model)
+        self.solver = cp_model.CpSolver()
+        status = self.solver.Solve(model)
 
         if status == cp_model.INFEASIBLE:
-            infeasible_assumption_indices = solver.SufficientAssumptionsForInfeasibility()
+            infeasible_assumption_indices = self.solver.SufficientAssumptionsForInfeasibility()
             conflicting_constraints = []
             
             for index in infeasible_assumption_indices:
@@ -234,7 +218,8 @@ class EfficientConstraintSorter:
 
         if c_type == 'forbidden':
             x, y, intervals = data['x'], data['y'], data['intervals']
-            if x not in self.elements or y not in self.elements: return
+            if x not in self.elements or y not in self.elements:
+                return
             
             # The entire forbidden constraint for (x, y) is one logical unit.
             # We need to enforce that for this pair, ALL interval restrictions apply.
@@ -270,10 +255,12 @@ class EfficientConstraintSorter:
 
         elif c_type == 'disjunctive':
             x, y_list, intervals = data['x'], data['y_list'], data['intervals']
-            if x not in self.elements: return
+            if x not in self.elements:
+                return
 
             valid_y_list = [y for y in y_list if y in self.elements]
-            if not valid_y_list: return
+            if not valid_y_list:
+                return
 
             # We need at least one `y` in `y_list` to satisfy the condition.
             # `is_satisfied_for_y` is true if `pos(x)-pos(y)` is OUTSIDE all forbidden intervals.
@@ -329,11 +316,60 @@ class EfficientConstraintSorter:
         model.Add(total_dist == sum(dist_vars))
         model.Maximize(total_dist)
 
-        solver = cp_model.CpSolver()
-        solver.parameters.max_time_in_seconds = max(1, time_limit_seconds - elapsed)
+        self.solver = cp_model.CpSolver()
+        self.solver.parameters.max_time_in_seconds = max(1, time_limit_seconds - elapsed)
         progress_cb = ProgressCallback(self, saved, position, total_dist)
-        status = solver.SolveWithSolutionCallback(model, progress_cb)
-        return solver, status
+        self.p = multiprocessing.Process(target=input_listener)
+        self.p.start()
+        status = self.solver.SolveWithSolutionCallback(model, progress_cb)
+        self.p.terminate()
+        self.p.join()
+        return status
+
+    def order_table(self, res):
+        new_pos = [0] * len(table)
+        for i, old_index in enumerate(res):
+            new_pos[old_index] = i
+        updated_roles = [False] * len(roles)
+        new_table = [table[0]]
+        for n in res[1:]:
+            row = table[n]
+            for j, cell in enumerate(row):
+                if roles[j] == 'dependencies':
+                    if cell:
+                        updated_cell = cell.split('; ')
+                        for d, instr in enumerate(list(updated_cell)):
+                            instr_split = instr.split('.')
+                            if len(self.dep_pattern[j]) > 1:
+                                instr = self.dep_pattern[j][0] + ''.join([instr_split[i]+self.dep_pattern[j][i+1] for i in range(len(instr_split))])
+                            match = re.match(PATTERN_DISTANCE, instr)
+                            if not match:
+                                match = re.match(PATTERN_AREAS, instr)
+                            if match.group("number"):
+                                number = int(match.group("number"))
+                                new_instr = f"{match.group('prefix')}{"any" if match.group('any') else ''}{new_pos[number]}{match.group('suffix')}"
+                                prefix = f"{match.group('prefix')}{"any" if match.group('any') else ''}"
+                                str_len = 0
+                                prev_str_len = 0
+                                id = 0
+                                id2 = 0
+                                while id < len(new_pos) and str_len <= len(prefix):
+                                    prev_str_len = str_len
+                                    if id == id2:
+                                        str_len += len(self.dep_pattern[j][id])
+                                        id += 1
+                                    else:
+                                        str_len += len(instr_split[id2])
+                                        id2 += 1
+                                if id == id2:
+                                    instr_split[id2-1] = new_instr[prev_str_len:str_len]
+                                    updated_cell[d] = '.'.join(instr_split)
+                                elif not updated_roles[j]:
+                                    self.dep_pattern[j][id-1] = new_instr[prev_str_len:str_len]
+                                    updated_roles[j] = True
+                        row[j] = '; '.join(updated_cell)
+            new_table.append(row)
+        return new_table
 
     def _save_incremental_solution(self, saved, in_pyperclip=False):
         """Save an incremental solution to file with metadata."""
@@ -341,7 +377,7 @@ class EfficientConstraintSorter:
         if solution:
             print(f"Solution found: {solution}")
             self.cat_rows_copy = list(self.cat_rows)
-            res = [0] + [self.to_old_indexes[self.alph.index(elem)] for elem in solution]
+            res = [0] + [self.to_old_indexes[self.elements.index(elem)] for elem in solution]
             i = 1
             while i < len(res):
                 d = 0
@@ -360,10 +396,13 @@ class EfficientConstraintSorter:
                         d += 1
                 i += 1
             res.extend(self.cat_rows_copy)
-            new_table = order_table(res, self.table, roles, self.dep_pattern)
-            saved["output"]["new_table"] = new_table
+            new_table = self.order_table(res)
+            saved["output"]["table"] = new_table
+        else:
+            new_table = self.table
+        if self.manual:
             global fst_row, fst_col
-            result = [roles] + new_table
+            result = [self.roles] + new_table
             for i in range(len(result)):
                 result[i] = [fst_col[i]] + result[i]
             result.insert(0, fst_row)
@@ -466,7 +505,6 @@ class EfficientConstraintSorter:
                     model.AddBoolOr(satisfied_with_y)
 
     ## Z3 Solver with Conflict Detection
-    
     def solve_with_z3(self, time_limit_ms: int = 300000) -> Optional[List[str]]:
         """Solve using Z3 with unsat core for conflict detection."""
         s = Solver()
@@ -543,6 +581,43 @@ class EfficientConstraintSorter:
         else:
             raise ValueError("Method must be 'ortools' or 'z3'")
 
+def solver(saved, errors, to_pyperclip):
+    sorter = EfficientConstraintSorter(saved, errors, to_pyperclip)
+    for idx, inst_list in enumerate(saved["data"]["instructions"]):
+        current = saved["data"]["elements"][idx]
+        for inst in inst_list:
+            targets = []
+            for number in inst.numbers:
+                targets.append(saved["data"]["elements"][number])
+            # Forbidden constraint
+            if inst.is_constraint:
+                if inst.any:
+                    sorter.add_forbidden_constraint_any_y(current, targets, inst.intervals)
+                else:
+                    for target in targets:
+                        if target != current:
+                            sorter.add_forbidden_constraint(current, target, inst.intervals)
+            else:
+                # Maximizing distance constraint
+                for target in targets:
+                    sorter.add_maximize_distance_constraint(current, target)
+    for cat, rows in saved["data"]["attributes"].items():
+        category = [k for k, v in rows.items() if v[0]]
+        if len(category) > 1:
+            sorter.add_group_maximize(set(map(lambda x: saved["data"]["new_indexes"][x], category)))
+
+    # Solve the problem
+    print("Solving constraint-based sorting problem...")
+    ortools_loaded.wait(timeout=30)
+    return sorter.solve(time_limit=300000000000)
+
+def input_listener():
+    global stop_requested
+    while True:
+        text = sys.stdin.readline().strip()
+        if text.lower() == "q":
+            exit(0)
+            
 def preload_ortools():
     global cp_model, ProgressCallback
     from ortools.sat.python import cp_model as _cp_model
@@ -561,8 +636,13 @@ def preload_ortools():
 
             # Keep track of improvement
             if self.best_dist is None or current_dist > self.best_dist:
+                self._parent.p.terminate()
+                self._parent.p.join()
                 self.best_dist = current_dist
                 self._parent._return_result(self, self.saved, self._position, cp_model.OPTIMAL)
+                self._parent.p = multiprocessing.Process(target=input_listener)
+                self._parent.p.start()
+
 
             print(f"Time: {datetime.now()}, Current best distance: {current_dist}")
     ortools_loaded.set()
@@ -582,11 +662,11 @@ def get_intervals(interval_str):
                 start, end = part.split(':')
                 try:
                     start = int(start)
-                except:
+                except Exception:
                     start = float('inf')
                 try:
                     end = int(end)
-                except:
+                except Exception:
                     end = float('inf')
                 if not positive:
                     start = -start
@@ -635,73 +715,8 @@ def generate_unique_strings(n):
                 return result
         length += 1
 
-def go(strings, instructions, sorter):
-    for idx, inst_list in enumerate(instructions):
-        current = strings[idx]
-        for inst in inst_list:
-            targets = []
-            for number in inst.numbers:
-                targets.append(strings[number])
-            # Forbidden constraint
-            if inst.is_constraint:
-                if inst.any:
-                    sorter.add_forbidden_constraint_any_y(current, targets, inst.intervals)
-                else:
-                    for target in targets:
-                        if target != current:
-                            sorter.add_forbidden_constraint(current, target, inst.intervals)
-            else:
-                # Maximizing distance constraint
-                for target in targets:
-                    sorter.add_maximize_distance_constraint(current, target)
-
-def order_table(res, table, roles, dep_pattern):
-    new_pos = [0] * len(table)
-    for i, old_index in enumerate(res):
-        new_pos[old_index] = i
-    updated_roles = [False] * len(roles)
-    new_table = [table[0]]
-    for n in res[1:]:
-        row = table[n]
-        for j, cell in enumerate(row):
-            if roles[j] == 'dependencies':
-                if cell:
-                    updated_cell = cell.split('; ')
-                    for d, instr in enumerate(list(updated_cell)):
-                        instr_split = instr.split('.')
-                        if len(dep_pattern[j]) > 1:
-                            instr = dep_pattern[j][0] + ''.join([instr_split[i]+dep_pattern[j][i+1] for i in range(len(instr_split))])
-                        match = re.match(PATTERN_DISTANCE, instr)
-                        if not match:
-                            match = re.match(PATTERN_AREAS, instr)
-                        if match.group("number"):
-                            number = int(match.group("number"))
-                            new_instr = f"{match.group('prefix')}{"any" if match.group('any') else ''}{new_pos[number]}{match.group('suffix')}"
-                            prefix = f"{match.group('prefix')}{"any" if match.group('any') else ''}"
-                            str_len = 0
-                            prev_str_len = 0
-                            id = 0
-                            id2 = 0
-                            while id < len(new_pos) and str_len <= len(prefix):
-                                prev_str_len = str_len
-                                if id == id2:
-                                    str_len += len(dep_pattern[j][id])
-                                    id += 1
-                                else:
-                                    str_len += len(instr_split[id2])
-                                    id2 += 1
-                            if id == id2:
-                                instr_split[id2-1] = new_instr[prev_str_len:str_len]
-                                updated_cell[d] = '.'.join(instr_split)
-                            elif not updated_roles[j]:
-                                dep_pattern[j][id-1] = new_instr[prev_str_len:str_len]
-                                updated_roles[j] = True
-                    row[j] = '; '.join(updated_cell)
-        new_table.append(row)
-    return new_table
-
-def accumulate_dependencies(graph):
-    def dfs(node, path):
+def accumulate_dependencies(graph, warnings):
+    def dfs(node, path, warnings):
         if node in path:
             cycle_start = path.index(node)
             cycle = path[cycle_start:] + [node]
@@ -714,7 +729,7 @@ def accumulate_dependencies(graph):
         for neighbor in graph[node]:
             if neighbor not in graph:
                 continue
-            res = dfs(neighbor, path.copy())
+            res = dfs(neighbor, path.copy(), warnings)
             for key, value in res.items():
                 accumulated[key] = tuple(value)
                 accumulated[key][1].append(node)
@@ -726,15 +741,14 @@ def accumulate_dependencies(graph):
 
     result = {}
     for node in graph:
-        dfs(node, [])
+        dfs(node, [], warnings)
     return result
 
 def sorter(table, roles, errors, warnings, manual = False):
-    alph = generate_unique_strings(max(len(roles), len(table)))
     path_index = roles.index('path') if 'path' in roles else -1
     if path_index == -1:
         errors.append("Error: 'path' role not found in roles")
-        return table
+        return
     for i, row in enumerate(table):
         for j, cell in enumerate(row):
             cells = cell.split(';')
@@ -748,6 +762,8 @@ def sorter(table, roles, errors, warnings, manual = False):
                         elif cells[k].endswith("-lst"):
                             cells[k] = cells[k][:-4].strip() + " -lst"
             row[j] = '; '.join(cells)
+    saved = {"input": {"table": table, "roles": roles}, "output": {"errors": errors}}
+    alph = generate_unique_strings(max(len(roles), len(table)))
     for i, row in enumerate(table[1:]):
         cell = row[path_index]
         if cell:
@@ -762,7 +778,7 @@ def sorter(table, roles, errors, warnings, manual = False):
                     try:
                         int(name)
                         errors.append(f"Error in row {i}, column {alph[j]}: {name!r} is not a valid name")
-                        return table
+                        return
                     except ValueError:
                         pass
                     match = re.search(r" -(\w+)$", name)
@@ -774,7 +790,7 @@ def sorter(table, roles, errors, warnings, manual = False):
                         errors.append(f"Error in row {i}, column {alph[j]}: name {name!r} already exists in row {names[name]}")
                     names[name] = i
     if errors:
-        return table
+        return
     attributes = {}
     first_element = None
     last_element = None
@@ -791,7 +807,7 @@ def sorter(table, roles, errors, warnings, manual = False):
                 for instr in cell_list:
                     if not instr:
                         errors.append(f"Error in row {i}, column {alph[j]}: empty attribute name")
-                        return table
+                        return
                     if is_fst := instr.endswith("-fst"):
                         instr = instr[:-5]
                     elif instr == "fst":
@@ -802,12 +818,12 @@ def sorter(table, roles, errors, warnings, manual = False):
                         last_element = i
                     elif "-fst" in instr:
                         errors.append(f"Error in row {i}, column {alph[j]}: '-fst' is not at the end of {instr!r}")
-                        return table
+                        return
                     try:
                         k = int(instr)
                         if k < 1 or k > len(table)-1:
                             errors.append(f"Error in row {i}, column {alph[j]}: {instr!r} points to an invalid row {k}")
-                            return table
+                            return
                     except ValueError:
                         k = -1
                         if instr in names:
@@ -826,14 +842,14 @@ def sorter(table, roles, errors, warnings, manual = False):
                         lst_cat[i] = k
                     new_cell_list.append(instr)
                 row[j] = '; '.join(new_cell_list)
-    attributes = accumulate_dependencies(attributes)
+    attributes = accumulate_dependencies(attributes, warnings)
     urls = [(table[i][path_index], []) for i in range(len(table))]
     for i, row in enumerate(table[1:], start=1):
         if row[path_index] and i in attributes:
             for k in attributes[i].keys():
                 if urls[k][0]:
                     errors.append(f"Error in row {i}, column {alph[path_index]}: a URL given by {' -> '.join([str(x) for x in urls[i][1]])} conflicts with another given by {' -> '.join([str(x) for x in attributes[i][k][1]])}")
-                    return table
+                    return
                 urls[k] = (row[path_index], attributes[i][k][1])
     valid_row_indexes = []
     is_valid = [False] * len(table)
@@ -852,7 +868,7 @@ def sorter(table, roles, errors, warnings, manual = False):
             cat_rows.append(i)
     if not valid_row_indexes:
         errors.append("Error: No valid rows found in the table!")
-        return table
+        return
 
     for cat in list(attributes.keys()):
         if type(cat) is not int:
@@ -897,7 +913,7 @@ def sorter(table, roles, errors, warnings, manual = False):
                         instr_split = instr.split('.')
                         if len(instr_split) != len(dep_pattern[j])-1 and len(dep_pattern[j]) > 1:
                             errors.append(f"Error in row {i}, column {alph[j]}: {instr!r} does not match dependencies pattern {dep_pattern[j]!r}")
-                            return table
+                            return
                         if len(dep_pattern[j]) > 1:
                             instr = dep_pattern[j][0] + ''.join([instr_split[i]+dep_pattern[j][i+1] for i in range(len(instr_split))])
                         match = re.match(PATTERN_DISTANCE, instr)
@@ -906,27 +922,27 @@ def sorter(table, roles, errors, warnings, manual = False):
                             match = re.match(PATTERN_AREAS, instr)
                             if not match:
                                 errors.append(f"Error in row {i}, column {alph[j]}: {instr!r} does not match expected format")
-                                return table
+                                return
                             intervals = get_intervals(instr)
                         numbers = []
                         if match.group("number"):
                             number = int(match.group("number"))
                             if number == 0 or number > len(table):
                                 errors.append(f"Error in row {i}, column {alph[j]}: invalid number.")
-                                return table
+                                return
                             if table[number][path_index]:
                                 numbers.append(number)
                             name = number
                         elif not (name := match.group("name")):
                             errors.append(f"Error in row {i}, column {alph[j]}: {instr!r} does not match expected format")
-                            return table
+                            return
                         if name in attributes:
                             for r in attributes[name].keys():
                                 numbers.append(r)
                         elif match.group("name"):
                             if name not in names:
                                 errors.append(f"Error in row {i}, column {alph[j]}: attribute {name!r} does not exist")
-                                return table
+                                return
                             if table[names[name]][path_index]:
                                 numbers.append(names[name])
                             if names[name] in attributes:
@@ -969,73 +985,64 @@ def sorter(table, roles, errors, warnings, manual = False):
         for i in range(len(instr_table)):
             if has_cycle(instr_table, visited, stack, i, p):
                 errors.append(f"Cycle detected: {(' after ' if p else ' before ').join(['->'.join([str(x) for x in k]) for k in stack])}")
-                return table
+                return
     urls = [urls[i][0] for i in valid_row_indexes]
-    sorter = EfficientConstraintSorter(alph[:len(valid_row_indexes)], table, urls, to_old_indexes, alph, cat_rows, attributes_table, dep_pattern, errors, path_index, manual)
-    go(alph, instr_table, sorter)
-    for cat, rows in attributes.items():
-        category = [k for k, v in rows.items() if v[0]]
-        if len(category) > 1:
-            sorter.add_group_maximize(set(map(lambda x: new_indexes[x], category)))
+    saved["data"] = {
+        "elements": alph[:len(valid_row_indexes)],
+        "instructions": instr_table,
+        "urls": urls,
+        "to_old_indexes": to_old_indexes,
+        "cat_rows": cat_rows,
+        "attributes_table": attributes_table,
+        "roles": roles,
+        "dep_pattern": dep_pattern,
+        "path_index": path_index,
+        "attributes": attributes,
+        "new_indexes": new_indexes
+    }
+    solver(saved, errors, manual)
 
-    # Solve the problem
-    print("Solving constraint-based sorting problem...")
-    ortools_loaded.wait(timeout=30)
-    return sorter.solve(time_limit=300000000000)
 
 if __name__ == "__main__":
-    try:
-        threading.Thread(target=preload_ortools, daemon=True).start()
-        import pyperclip
-        # clipboard_content = pyperclip.paste()
-        with open('data/test.txt', 'r') as f:
-            clipboard_content = f.read()
-        table = [line.split('\t') for line in re.split(r'\r?\n', clipboard_content)]
-        crop_line = len(table)
-        crop_column = len(table[0])
-        for i in range(len(table) - 1, -1, -1):
-            if table[i] != ['']* len(table[0]):
-                crop_line = i + 1
-                break
-        for j in range(len(table[0]) - 1, -1, -1):
-            if any(row[j] for row in table):
-                crop_column = j + 1
-                break
-        fst_row = table[0]
-        table = table[1:crop_line]
-        fst_col = [row[0] for row in table]
-        for i in range(len(table)):
-            table[i] = table[i][1:crop_column]
-        warnings = []
-        errors = []
-        roles = table[0]
-        table = table[1:]
-        for i, role in enumerate(roles):
-            role = role.strip().lower()
-            if role not in ROLES:
-                errors.append(f"Error: Invalid role {role!r} found in roles")
-                result = table
-                break
-            roles[i] = role
-        else:
-            result = sorter(table, roles, errors, warnings, True)
-        if errors:
-            print("Errors found:")
-            for error in errors:
-                print(f"- {error}")
-        if warnings:
-            print("Warnings found:")
-            for warning in warnings:
-                print(f"- {warning}")
-        result.insert(0, roles)
-        for i in range(len(fst_col)):
-            result[i] = [fst_col[i]] + result[i]
-        result.insert(0, fst_row)
-        new_clipboard_content = '\n'.join(['\t'.join(row) for row in result])
-        pyperclip.copy(new_clipboard_content)
-        input("Sorted table copied to clipboard. Press Enter to exit.")
-    # except Exception as e:
-    #     print(f"An error occurred: {e}")
-    #     input("Press Enter to exit.")
-    except KeyboardInterrupt:
-        print("\nSorting interrupted by user.")
+    threading.Thread(target=preload_ortools, daemon=True).start()
+    import pyperclip
+    # clipboard_content = pyperclip.paste()
+    with open('data/test.txt', 'r') as f:
+        clipboard_content = f.read()
+    table = [line.split('\t') for line in re.split(r'\r?\n', clipboard_content)]
+    crop_line = len(table)
+    crop_column = len(table[0])
+    for i in range(len(table) - 1, -1, -1):
+        if table[i] != ['']* len(table[0]):
+            crop_line = i + 1
+            break
+    for j in range(len(table[0]) - 1, -1, -1):
+        if any(row[j] for row in table):
+            crop_column = j + 1
+            break
+    fst_row = table[0]
+    table = table[1:crop_line]
+    fst_col = [row[0] for row in table]
+    for i in range(len(table)):
+        table[i] = table[i][1:crop_column]
+    warnings = []
+    errors = []
+    roles = table[0]
+    table = table[1:]
+    for i, role in enumerate(roles):
+        role = role.strip().lower()
+        if role not in ROLES:
+            errors.append(f"Error: Invalid role {role!r} found in roles")
+            result = table
+            break
+        roles[i] = role
+    else:
+        result = sorter(table, roles, errors, warnings, True)
+    if errors:
+        print("Errors found:")
+        for error in errors:
+            print(f"- {error}")
+    if warnings:
+        print("Warnings found:")
+        for warning in warnings:
+            print(f"- {warning}")
