@@ -36,14 +36,14 @@ def files_with_same_stem(base: Path):
     matches = [p for p in parent.glob(f"{stem}.*") if p.is_file()]
     return matches
 
-def get_playlist_status(errors, ask_if_no_default = False, get_all_videos = False, get_all_new_table = False):
+def get_playlist_status(show_missings = True, ask_if_no_default = False, get_all_videos = False, get_all_new_table = False):
     # --- Ask user for playlist name via CMD ---
     if not get_all_videos:
         print("available playlists:")
     os.makedirs(PLAYLISTS_PATH, exist_ok=True)
     os.makedirs(DECRYPTED_MEDIA_PATH, exist_ok=True)
     os.makedirs(ENCRYPTED_MEDIA_PATH, exist_ok=True)
-    all_playlists = [os.path.basename(f) for f in os.listdir(PLAYLISTS_PATH)]
+    all_playlists = [os.path.basename(f) for f in os.listdir(PLAYLISTS_PATH) if f.endswith('.pkl')]
     if not all_playlists:
         print("No playlists found.")
         return {}, ""
@@ -65,25 +65,23 @@ def get_playlist_status(errors, ask_if_no_default = False, get_all_videos = Fals
         if not ask_if_no_default:
             playlists[file] = {"media":[], "not_decrypted": []}
             file_path = os.path.join(PLAYLISTS_PATH, file)
-            if not os.path.exists(file_path):
-                errors.append(f"Playlist file referenced but does not exist: {file_path}")
-                return
             with open(file_path, 'rb') as f:
                 saved = pickle.load(f)
                 playlists[file].update(saved)
-            paths = playlists[file]["data"]["urls"]
-            for i, path in enumerate(paths):
-                files_found = files_with_same_stem(Path(DECRYPTED_MEDIA_PATH) / path)
-                if files_found:
-                    playlists[file]["media"].append(files_found[0])
-                else:
-                    url = filename_to_url(path)
-                    files_found = files_with_same_stem(Path(ENCRYPTED_MEDIA_PATH) / path)
+            if show_missings:
+                paths = playlists[file]["data"]["urls"]
+                for i, path in enumerate(paths):
+                    files_found = files_with_same_stem(Path(DECRYPTED_MEDIA_PATH) / path)
                     if files_found:
-                        playlists[file]["not_decrypted"].append(files_found[0])
-                        suffix += f"\n\t(medium {i + 1} not decrypted: {url})"
+                        playlists[file]["media"].append(files_found[0])
                     else:
-                        suffix += f"\n\t(medium {i + 1} missing: {url})"
+                        url = filename_to_url(path)
+                        files_found = files_with_same_stem(Path(ENCRYPTED_MEDIA_PATH) / path)
+                        if files_found:
+                            playlists[file]["not_decrypted"].append(files_found[0])
+                            suffix += f"\n\t(medium {i + 1} not decrypted: {url})"
+                        else:
+                            suffix += f"\n\t(medium {i + 1} missing: {url})"
         playlist_infos.append((file, suffix, if_default))
 
     if get_all_videos:

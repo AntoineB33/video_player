@@ -10,6 +10,7 @@ import threading
 import multiprocessing
 import pickle
 import time
+import pyperclip
 from config import PLAYLISTS_PATH
 
 ROLES = ['path', 'names', 'attributes', 'dependencies', 'sprawl']
@@ -47,7 +48,7 @@ class instr_struct:
         ))
         
 class EfficientConstraintSorter:
-    def __init__(self, saved, errors, to_pyperclip):
+    def __init__(self, saved, preload_thread, errors, existing_pb, to_pyperclip):
         self.saved = saved
         self.elements = saved.get("data", {}).get("elements", [])
         self.table = saved.get("input", {}).get("table", [])
@@ -57,8 +58,10 @@ class EfficientConstraintSorter:
         self.attributes_table = saved.get("data", {}).get("attributes_table", [])
         self.roles = saved.get("data", {}).get("roles", [])
         self.dep_pattern = saved.get("data", {}).get("dep_pattern", [])
-        self.errors = errors
         self.path_index = saved.get("data", {}).get("path_index", 0)
+        self.preload_thread = preload_thread
+        self.errors = errors
+        self.existing_pb = existing_pb
         self.manual = to_pyperclip
         self.n = len(self.elements)
         self.element_to_idx = {name: i for i, name in enumerate(self.elements)}
@@ -136,6 +139,7 @@ class EfficientConstraintSorter:
             self._add_single_ortools_constraint(model, position, constraint)
 
         # First, try to solve the model as is
+        self.preload_thread.join()
         self.solver = cp_model.CpSolver()
         self.solver.parameters.max_time_in_seconds = time_limit_seconds
 
@@ -144,25 +148,30 @@ class EfficientConstraintSorter:
             with open(self.file_path, "rb") as f:
                 prev_sorting = pickle.load(f)
         else:
-            prev_sorting = {"data": {}, "output": {"error": False}}
+            prev_sorting = {"data": {}, "output": {"error": False, "best_dist": None}}
         prev_sorting["input"] = self.saved["input"]
-        if prev_sorting["data"] == self.saved["data"]:
+        if "fst_row" in self.saved:
+            prev_sorting["fst_row"] = self.saved["fst_row"]
+            prev_sorting["fst_col"] = self.saved["fst_col"]
+        to_pyperclip = self.manual
+        if self.existing_pb or prev_sorting["data"] == self.saved["data"]:
             if prev_sorting["output"]["error"]:
-                self.errors.append(prev_sorting["output"]["error"])
-                return self.table
-            elif prev_sorting["output"]["done"]:
-                self._save_incremental_solution(prev_sorting, True)
+                self.errors.extend(prev_sorting["output"]["error"])
+                return
+            self._save_incremental_solution(prev_sorting, to_pyperclip)
+            if prev_sorting["output"]["done"]:
+                return
         else:
             prev_sorting["data"] = self.saved["data"]
-
-        self.p = multiprocessing.Process(target=input_listener)
-        self.p.start()
-        status = self.solver.Solve(model)
-        self.p.terminate()
-        self.p.join()
-        self._return_result(self.solver, prev_sorting, position, status, True)
+            self.p = multiprocessing.Process(target=input_listener)
+            self.p.start()
+            status = self.solver.Solve(model)
+            self.p.terminate()
+            self.p.join()
+            self._return_result(self.solver, prev_sorting, position, status, to_pyperclip)
+            to_pyperclip = False
         if self.maximize_distance:
-            status = self._solve_lexicographic_ortools(model, prev_sorting, position, time_limit_seconds)
+            status = self._solve_lexicographic_ortools(model, prev_sorting, position, time_limit_seconds, to_pyperclip)
             self._return_result(self.solver, prev_sorting, position, status)
 
     def _find_conflicting_constraints_ortools(self) -> List[str]:
@@ -297,7 +306,7 @@ class EfficientConstraintSorter:
             if satisfied_options:
                 add(model.AddBoolOr(satisfied_options))
 
-    def _solve_lexicographic_ortools(self, model, saved, position, time_limit_seconds):
+    def _solve_lexicographic_ortools(self, model, saved, position, time_limit_seconds, to_pyperclip = False):
         """Maximize the sum of all distances in maximize_distance."""
         k = len(self.maximize_distance)
         start_time = time.time()
@@ -318,7 +327,7 @@ class EfficientConstraintSorter:
 
         self.solver = cp_model.CpSolver()
         self.solver.parameters.max_time_in_seconds = max(1, time_limit_seconds - elapsed)
-        progress_cb = ProgressCallback(self, saved, position, total_dist)
+        progress_cb = ProgressCallback(self, saved, position, total_dist, to_pyperclip)
         self.p = multiprocessing.Process(target=input_listener)
         self.p.start()
         status = self.solver.SolveWithSolutionCallback(model, progress_cb)
@@ -327,6 +336,8 @@ class EfficientConstraintSorter:
         return status
 
     def order_table(self, res):
+        table = self.table
+        roles = self.roles
         new_pos = [0] * len(table)
         for i, old_index in enumerate(res):
             new_pos[old_index] = i
@@ -401,7 +412,8 @@ class EfficientConstraintSorter:
         else:
             new_table = self.table
         if self.manual:
-            global fst_row, fst_col
+            fst_row = saved["fst_row"]
+            fst_col = saved["fst_col"]
             result = [self.roles] + new_table
             for i in range(len(result)):
                 result[i] = [fst_col[i]] + result[i]
@@ -413,7 +425,7 @@ class EfficientConstraintSorter:
                 f.write(for_pyperclip)
         with open(self.file_path, 'wb') as f:
             pickle.dump(saved, f)
-        return new_table
+        return
     
     def _add_constraints_to_model(self, model, position):
         """Helper method to add all original constraints to a model."""
@@ -575,14 +587,17 @@ class EfficientConstraintSorter:
     def solve(self, method: str = "ortools", time_limit: int = 300) -> Optional[List[str]]:
         self.last_violations = []
         if method.lower() == "ortools":
-            return self.solve_with_ortools(time_limit)
+            self.solve_with_ortools(time_limit)
         elif method.lower() == "z3":
-            return self.solve_with_z3(time_limit * 1000)
+            self.solve_with_z3(time_limit * 1000)
         else:
             raise ValueError("Method must be 'ortools' or 'z3'")
 
-def solver(saved, errors, to_pyperclip):
-    sorter = EfficientConstraintSorter(saved, errors, to_pyperclip)
+def solver(saved, errors, to_pyperclip, preload_thread = None, existing_pb = False):
+    if preload_thread is None:
+        preload_thread = threading.Thread(target=preload_ortools, daemon=True)
+        preload_thread.start()
+    sorter = EfficientConstraintSorter(saved, preload_thread, errors, existing_pb, to_pyperclip)
     for idx, inst_list in enumerate(saved["data"]["instructions"]):
         current = saved["data"]["elements"][idx]
         for inst in inst_list:
@@ -609,7 +624,7 @@ def solver(saved, errors, to_pyperclip):
     # Solve the problem
     print("Solving constraint-based sorting problem...")
     ortools_loaded.wait(timeout=30)
-    return sorter.solve(time_limit=300000000000)
+    sorter.solve(time_limit=300000000000)
 
 def input_listener():
     global stop_requested
@@ -623,13 +638,14 @@ def preload_ortools():
     from ortools.sat.python import cp_model as _cp_model
     cp_model = _cp_model
     class ProgressCallback(cp_model.CpSolverSolutionCallback):
-        def __init__(self, parent, saved, position, total_dist):
+        def __init__(self, parent, saved, position, total_dist, to_pyperclip):
             cp_model.CpSolverSolutionCallback.__init__(self)
             self._parent = parent
             self.saved = saved
             self._position = position
             self._total_dist = total_dist
-            self.best_dist = None
+            self.to_pyperclip = to_pyperclip
+            self.best_dist = saved["output"]["best_dist"]
 
         def OnSolutionCallback(self):
             current_dist = self.Value(self._total_dist)
@@ -639,7 +655,9 @@ def preload_ortools():
                 self._parent.p.terminate()
                 self._parent.p.join()
                 self.best_dist = current_dist
-                self._parent._return_result(self, self.saved, self._position, cp_model.OPTIMAL)
+                self.saved["output"]["best_dist"] = current_dist
+                self._parent._return_result(self, self.saved, self._position, cp_model.OPTIMAL, self.to_pyperclip)
+                self.to_pyperclip = False
                 self._parent.p = multiprocessing.Process(target=input_listener)
                 self._parent.p.start()
 
@@ -744,7 +762,7 @@ def accumulate_dependencies(graph, warnings):
         dfs(node, [], warnings)
     return result
 
-def sorter(table, roles, errors, warnings, manual = False):
+def sorter(table, roles, errors, warnings, preload_thread, fst_row, fst_col):
     path_index = roles.index('path') if 'path' in roles else -1
     if path_index == -1:
         errors.append("Error: 'path' role not found in roles")
@@ -1000,12 +1018,15 @@ def sorter(table, roles, errors, warnings, manual = False):
         "attributes": attributes,
         "new_indexes": new_indexes
     }
-    solver(saved, errors, manual)
+    if fst_row is not None:
+        saved["fst_row"] = fst_row
+        saved["fst_col"] = fst_col
+    solver(saved, errors, fst_row is not None, preload_thread)
 
 
 if __name__ == "__main__":
-    threading.Thread(target=preload_ortools, daemon=True).start()
-    import pyperclip
+    preload_thread = threading.Thread(target=preload_ortools, daemon=True)
+    preload_thread.start()
     # clipboard_content = pyperclip.paste()
     with open('data/test.txt', 'r') as f:
         clipboard_content = f.read()
@@ -1037,7 +1058,7 @@ if __name__ == "__main__":
             break
         roles[i] = role
     else:
-        result = sorter(table, roles, errors, warnings, True)
+        result = sorter(table, roles, errors, warnings, preload_thread, fst_row, fst_col)
     if errors:
         print("Errors found:")
         for error in errors:
