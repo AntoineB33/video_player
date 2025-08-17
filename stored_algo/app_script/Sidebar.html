@@ -57,21 +57,25 @@
     <div id="result"></div>
 
     <script>
-      // 🔹 Fetch and show active cell elements
+      // 🔹 Fetch and show active cell elements (with possible links)
       function updateCellElements() {
         google.script.run.withSuccessHandler(function(elements) {
           const container = document.getElementById('elementsList');
           if (elements.length > 0) {
             let html = '<ul>';
             elements.forEach(el => {
-              html += `<li>${el}</li>`;
+              if (el.isLink) {
+                html += `<li><a onclick="goToCell(${el.row}, ${el.col})">${el.text}</a></li>`;
+              } else {
+                html += `<li>${el.text}</li>`;
+              }
             });
             html += '</ul>';
             container.innerHTML = html;
           } else {
             container.innerHTML = '<em>(empty cell)</em>';
           }
-        }).getActiveCellElements();
+        }).getCellElementsWithLinks();
       }
 
       // Refresh elements when sidebar loads

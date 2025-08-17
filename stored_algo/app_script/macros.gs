@@ -87,3 +87,40 @@ function getActiveCellElements() {
   
   return value.split(';').map(s => s.trim()).filter(s => s);
 }
+
+/**
+ * Given a list of elements, check if they match the first cell of any row.
+ * Returns an array of objects with { text, row, col, isLink }.
+ */
+function getCellElementsWithLinks() {
+  const sheet = SpreadsheetApp.getActiveSheet();
+  const cell = sheet.getActiveRange();
+  if (!cell) return [];
+
+  const value = cell.getValue();
+  if (typeof value !== 'string') return [];
+
+  const elements = value.split(';').map(s => s.trim()).filter(s => s);
+
+  const data = sheet.getDataRange().getValues();
+  const result = [];
+
+  elements.forEach(el => {
+    let linkRow = null;
+
+    for (let r = 0; r < data.length; r++) {
+      if (String(data[r][0]).trim() === el) {
+        linkRow = r + 1; // 1-based row
+        break;
+      }
+    }
+
+    if (linkRow) {
+      result.push({ text: el, row: linkRow, col: 1, isLink: true });
+    } else {
+      result.push({ text: el, row: null, col: null, isLink: false });
+    }
+  });
+
+  return result;
+}
