@@ -91,6 +91,7 @@ function getActiveCellElements() {
 /**
  * Given elements from the active cell, check if they match values
  * in the "names" column (the column whose header is "names" in row 2).
+ * If an element ends with " -fst", we search using the version without that suffix.
  * Returns an array of objects with { text, row, col, isLink }.
  */
 function getCellElementsWithLinks() {
@@ -121,11 +122,16 @@ function getCellElementsWithLinks() {
 
   const result = [];
   elements.forEach(el => {
+    // 🔹 If element ends with " -fst", strip it for lookup
+    const lookupValue = el.toLowerCase().endsWith(" -fst")
+      ? el.slice(0, -5).trim()
+      : el;
+
     let linkRow = null;
 
     // search in "names" column starting from row 3 (below headers)
     for (let r = 2; r < data.length; r++) {
-      if (String(data[r][namesCol - 1]).trim() === el) {
+      if (String(data[r][namesCol - 1]).trim() === lookupValue) {
         linkRow = r + 1; // 1-based row
         break;
       }
