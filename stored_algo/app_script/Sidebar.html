@@ -1,12 +1,3 @@
-Of course. Here is the updated `Sidebar.html` file, which now displays a "Searching..." or "Replacing..." message to provide feedback to the user while the script is running.
-
------
-
-### `Sidebar.html`
-
-The script has been modified to update the results `div` immediately when the "Find All" or "Replace All" buttons are clicked, indicating that a process is underway. This message is then replaced by the final results once the operation is complete.
-
-```html
 <!DOCTYPE html>
 <html>
   <head>
@@ -16,7 +7,7 @@ The script has been modified to update the results `div` immediately when the "F
       input, button {
         margin-top: 8px;
         width: 100%;
-        box-sizing: border-box; /* Ensures padding and border are included in the width */
+        box-sizing: border-box;
       }
       #result { margin-top: 12px; }
       ul { list-style-type: none; padding-left: 0; }
@@ -35,9 +26,25 @@ The script has been modified to update the results `div` immediately when the "F
         color: #666;
         font-style: italic;
       }
+      #cellElements {
+        margin: 10px 0;
+        padding: 6px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        background: #fafafa;
+      }
+      #cellElements ul {
+        margin: 0;
+      }
     </style>
   </head>
   <body>
+    <!-- 🔹 New section for current cell elements -->
+    <div id="cellElements">
+      <strong>Current Cell Elements:</strong>
+      <div id="elementsList"><em>No cell selected</em></div>
+    </div>
+
     <label for="findText">Find:</label>
     <input type="text" id="findText">
     
@@ -50,12 +57,34 @@ The script has been modified to update the results `div` immediately when the "F
     <div id="result"></div>
 
     <script>
+      // 🔹 Fetch and show active cell elements
+      function updateCellElements() {
+        google.script.run.withSuccessHandler(function(elements) {
+          const container = document.getElementById('elementsList');
+          if (elements.length > 0) {
+            let html = '<ul>';
+            elements.forEach(el => {
+              html += `<li>${el}</li>`;
+            });
+            html += '</ul>';
+            container.innerHTML = html;
+          } else {
+            container.innerHTML = '<em>(empty cell)</em>';
+          }
+        }).getActiveCellElements();
+      }
+
+      // Refresh elements when sidebar loads
+      updateCellElements();
+
+      // 🔹 Poll every 1s to detect cell change
+      setInterval(updateCellElements, 1000);
+
       function find() {
         const findText = document.getElementById('findText').value.trim();
         if (!findText) return;
 
         const resultDiv = document.getElementById('result');
-        // Add "Searching..." message
         resultDiv.innerHTML = '<div class="status-text">Searching... ⏳</div>';
 
         google.script.run.withSuccessHandler(function(matches) {
@@ -78,23 +107,18 @@ The script has been modified to update the results `div` immediately when the "F
         if (!findText) return;
 
         const resultDiv = document.getElementById('result');
-        // Add "Replacing..." message
         resultDiv.innerHTML = '<div class="status-text">Replacing... ⏳</div>';
 
         google.script.run.withSuccessHandler(function() {
           resultDiv.innerHTML = "Replacement complete. ✅";
+          // refresh after replacement
+          updateCellElements();
         }).replaceMatches(findText, replaceText);
       }
       
-      /**
-       * Calls the server-side function to activate a cell.
-       * @param {number} row The row number.
-       * @param {number} col The column number.
-       */
       function goToCell(row, col) {
         google.script.run.activateCell(row, col);
       }
     </script>
   </body>
 </html>
-```

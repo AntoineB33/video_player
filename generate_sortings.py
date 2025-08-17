@@ -137,7 +137,7 @@ class EfficientConstraintSorter:
         # Add all constraints to the model
         for constraint in self.constraints:
             self._add_single_ortools_constraint(model, position, constraint)
-
+        
         # First, try to solve the model as is
         self.preload_thread.join()
         self.solver = cp_model.CpSolver()
@@ -148,7 +148,7 @@ class EfficientConstraintSorter:
             with open(self.file_path, "rb") as f:
                 prev_sorting = pickle.load(f)
         else:
-            prev_sorting = {"data": {}, "output": {"error": False, "best_dist": None}}
+            prev_sorting = {"data": {}}
         prev_sorting["input"] = self.saved["input"]
         if "fst_row" in self.saved:
             prev_sorting["fst_row"] = self.saved["fst_row"]
@@ -163,6 +163,7 @@ class EfficientConstraintSorter:
                 return
         else:
             prev_sorting["data"] = self.saved["data"]
+            prev_sorting["output"] = {"error": [], "best_dist": None}
             self.p = multiprocessing.Process(target=input_listener)
             self.p.start()
             status = self.solver.Solve(model)
@@ -421,7 +422,7 @@ class EfficientConstraintSorter:
             for_pyperclip = '\n'.join(['\t'.join(row) for row in result])
             if in_pyperclip:
                 pyperclip.copy(for_pyperclip)
-            with open(self.file_path.replace(".pkl", "_table.txt"), 'w') as f:
+            with open(self.file_path.replace(".pkl", "_table.txt"), 'w', encoding='utf-8') as f:
                 f.write(for_pyperclip)
         with open(self.file_path, 'wb') as f:
             pickle.dump(saved, f)
@@ -1027,9 +1028,9 @@ def sorter(table, roles, errors, warnings, preload_thread, fst_row, fst_col):
 if __name__ == "__main__":
     preload_thread = threading.Thread(target=preload_ortools, daemon=True)
     preload_thread.start()
-    # clipboard_content = pyperclip.paste()
-    with open('data/test.txt', 'r') as f:
-        clipboard_content = f.read()
+    clipboard_content = pyperclip.paste()
+    # with open('data/test.txt', 'r') as f:
+    #     clipboard_content = f.read()
     table = [line.split('\t') for line in re.split(r'\r?\n', clipboard_content)]
     crop_line = len(table)
     crop_column = len(table[0])
@@ -1038,7 +1039,7 @@ if __name__ == "__main__":
             crop_line = i + 1
             break
     for j in range(len(table[0]) - 1, -1, -1):
-        if any(row[j] for row in table):
+        if any(row[j] for row in table[:3]):
             crop_column = j + 1
             break
     fst_row = table[0]
@@ -1067,3 +1068,4 @@ if __name__ == "__main__":
         print("Warnings found:")
         for warning in warnings:
             print(f"- {warning}")
+    input("Press Enter to continue...")

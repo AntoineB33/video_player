@@ -73,3 +73,17 @@ function replaceMatches(findText, replaceText) {
 function activateCell(row, col) {
   SpreadsheetApp.getActiveSheet().getRange(row, col).activate();
 }
+
+/**
+ * Returns the elements of the currently active cell,
+ * split by "; " and trimmed.
+ */
+function getActiveCellElements() {
+  const cell = SpreadsheetApp.getActiveRange();
+  if (!cell) return [];
+  
+  const value = cell.getValue();
+  if (typeof value !== 'string') return [];
+  
+  return value.split(';').map(s => s.trim()).filter(s => s);
+}

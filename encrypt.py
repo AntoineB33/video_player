@@ -75,6 +75,8 @@ def get_playlist_status(show_missings = True, ask_if_no_default = False, get_all
                     if files_found:
                         playlists[file]["media"].append(files_found[0])
                     else:
+                        if path == 'https://www.youtube.com/watch?v=DxmdySilOAI':
+                            print("h")
                         url = filename_to_url(path)
                         files_found = files_with_same_stem(Path(ENCRYPTED_MEDIA_PATH) / path)
                         if files_found:
