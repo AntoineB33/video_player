@@ -89,7 +89,8 @@ function getActiveCellElements() {
 }
 
 /**
- * Given a list of elements, check if they match the first cell of any row.
+ * Given elements from the active cell, check if they match values
+ * in the "names" column (the column whose header is "names" in row 2).
  * Returns an array of objects with { text, row, col, isLink }.
  */
 function getCellElementsWithLinks() {
@@ -103,20 +104,35 @@ function getCellElementsWithLinks() {
   const elements = value.split(';').map(s => s.trim()).filter(s => s);
 
   const data = sheet.getDataRange().getValues();
-  const result = [];
 
+  // 🔹 Find "names" column in the 2nd row
+  let namesCol = null;
+  for (let c = 0; c < data[1].length; c++) {
+    if (String(data[1][c]).trim().toLowerCase() === "names") {
+      namesCol = c + 1; // 1-based column index
+      break;
+    }
+  }
+
+  if (!namesCol) {
+    // No "names" column found → return plain list
+    return elements.map(el => ({ text: el, row: null, col: null, isLink: false }));
+  }
+
+  const result = [];
   elements.forEach(el => {
     let linkRow = null;
 
-    for (let r = 0; r < data.length; r++) {
-      if (String(data[r][0]).trim() === el) {
+    // search in "names" column starting from row 3 (below headers)
+    for (let r = 2; r < data.length; r++) {
+      if (String(data[r][namesCol - 1]).trim() === el) {
         linkRow = r + 1; // 1-based row
         break;
       }
     }
 
     if (linkRow) {
-      result.push({ text: el, row: linkRow, col: 1, isLink: true });
+      result.push({ text: el, row: linkRow, col: namesCol, isLink: true });
     } else {
       result.push({ text: el, row: null, col: null, isLink: false });
     }
