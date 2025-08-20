@@ -11,6 +11,7 @@ import multiprocessing
 import pickle
 import time
 import pyperclip
+import copy
 from config import PLAYLISTS_PATH
 
 ROLES = ['path', 'names', 'attributes', 'dependencies', 'sprawl']
@@ -969,15 +970,18 @@ def sorter(table, roles, errors, warnings, preload_thread, fst_row, fst_col):
                                     numbers.append(r)
                         numbers = list(map(lambda x: new_indexes[x], numbers))
                         instr_table[i].append(instr_struct(is_constraint, match.group("any"), numbers, intervals))
+    instr_table_ext = [list(x) for x in instr_table]
     for i in valid_row_indexes:
         for j in attributes_table[i]:
             if type(j) is int:
-                for x in instr_table[j]:
+                for x2 in instr_table[j]:
+                    x = copy.deepcopy(x2)
                     if x not in instr_table[i]:
                         x.path = attributes[j][i][1] + x.path
-                        instr_table[i].append(x)
+                        instr_table_ext[i].append(x)
                     elif len(instr_table[i][instr_table[i].index(x)].path) == 1:
                         warnings.append(f"Redundant instruction {x!r} in row {i}, column {alph[j]} given by {' -> '.join([str(x) for x in attributes[j][i][1] + x.path])}")
+    instr_table = instr_table_ext
     instr_table_int = []
     for i in valid_row_indexes:
         instr_table_int.append(list(set(instr_table[i])))
@@ -1028,9 +1032,9 @@ def sorter(table, roles, errors, warnings, preload_thread, fst_row, fst_col):
 if __name__ == "__main__":
     preload_thread = threading.Thread(target=preload_ortools, daemon=True)
     preload_thread.start()
-    clipboard_content = pyperclip.paste()
-    # with open('data/test.txt', 'r') as f:
-    #     clipboard_content = f.read()
+    # clipboard_content = pyperclip.paste()
+    with open('data/test.txt', 'r') as f:
+        clipboard_content = f.read()
     table = [line.split('\t') for line in re.split(r'\r?\n', clipboard_content)]
     crop_line = len(table)
     crop_column = len(table[0])
