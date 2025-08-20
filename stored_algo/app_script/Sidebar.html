@@ -39,6 +39,13 @@
     </style>
   </head>
   <body>
+    <!-- 🔹 History of visited cells -->
+    <div id="cellHistory" style="margin-bottom:10px; font-size:90%; color:#444;">
+      <strong>Cell History:</strong>
+      <div id="historyList"><em>(none yet)</em></div>
+    </div>
+
+
     <!-- 🔹 New section for current cell elements -->
     <div id="cellElements">
       <strong>Current Cell Elements:</strong>
@@ -83,6 +90,28 @@
 
       // 🔹 Poll every 1s to detect cell change
       setInterval(updateCellElements, 1000);
+
+      // Fetch and display cell history
+      function updateCellHistory() {
+        google.script.run.withSuccessHandler(function(history) {
+          const container = document.getElementById('historyList');
+          if (history.length > 0) {
+            let html = '<ul>';
+            history.slice().reverse().forEach(entry => {
+              html += `<li><a onclick="goToCell(${entry.row}, ${entry.col})">Row ${entry.row}, Col ${entry.col}</a></li>`;
+            });
+            html += '</ul>';
+            container.innerHTML = html;
+          } else {
+            container.innerHTML = '<em>(none yet)</em>';
+          }
+        }).getCellHistory();
+      }
+
+      // Call on load and poll every 1s
+      updateCellHistory();
+      setInterval(updateCellHistory, 1000);
+
 
       function find() {
         const findText = document.getElementById('findText').value.trim();

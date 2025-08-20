@@ -146,3 +146,43 @@ function getCellElementsWithLinks() {
 
   return result;
 }
+
+// Track history of focused cells in script properties
+function onSelectionChange(e) {
+  if (!e || !e.range) return;
+
+  const props = PropertiesService.getScriptProperties();
+  const history = JSON.parse(props.getProperty('cellHistory') || "[]");
+
+  const newCell = {
+    row: e.range.getRow(),
+    col: e.range.getColumn(),
+    timestamp: new Date().toISOString()
+  };
+
+  // Push new cell, avoid duplicates if it's the same as last
+  if (
+    history.length === 0 ||
+    history[history.length - 1].row !== newCell.row ||
+    history[history.length - 1].col !== newCell.col
+  ) {
+    history.push(newCell);
+  }
+
+  // Optional: limit history length to avoid bloat
+  if (history.length > 50) {
+    history.shift();
+  }
+
+  props.setProperty('cellHistory', JSON.stringify(history));
+}
+
+/**
+ * Returns the full history of selected cells as [{row, col, timestamp}...]
+ */
+function getCellHistory() {
+  const props = PropertiesService.getScriptProperties();
+  const history = props.getProperty('cellHistory');
+  return history ? JSON.parse(history) : [];
+}
+
