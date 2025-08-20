@@ -39,6 +39,15 @@
     </style>
   </head>
   <body>
+    <!-- 🔹 History navigation -->
+    <div style="margin:10px 0; padding:6px; border:1px solid #ccc; border-radius:4px; background:#f9f9f9;">
+      <strong>History Navigator</strong><br>
+      <div>
+        Index: <span id="historyIndex">0</span>
+      </div>
+      <button onclick="jumpNext()">Jump to Next in History</button>
+    </div>
+
     <!-- 🔹 History of visited cells -->
     <div id="cellHistory" style="margin-bottom:10px; font-size:90%; color:#444;">
       <strong>Cell History:</strong>
@@ -64,6 +73,42 @@
     <div id="result"></div>
 
     <script>
+
+      let historyIndex = 0;
+      let cachedHistory = [];
+
+      // Fetch and display cell history
+      function updateCellHistory() {
+        google.script.run.withSuccessHandler(function(history) {
+          cachedHistory = history; // store globally
+          const container = document.getElementById('historyList');
+          if (history.length > 0) {
+            let html = '<ul>';
+            history.slice().reverse().forEach((entry, idx) => {
+              html += `<li><a onclick="goToCell(${entry.row}, ${entry.col})">[${history.length - 1 - idx}] Row ${entry.row}, Col ${entry.col}</a></li>`;
+            });
+            html += '</ul>';
+            container.innerHTML = html;
+          } else {
+            container.innerHTML = '<em>(none yet)</em>';
+          }
+        }).getCellHistory();
+      }
+
+      // Increment index and jump
+      function jumpNext() {
+        if (historyIndex >= cachedHistory.length - 1) return;
+        historyIndex++;
+
+        document.getElementById('historyIndex').textContent = historyIndex;
+
+        const target = cachedHistory[cachedHistory.length - 1 - historyIndex]; 
+        // because we reversed display order
+        if (target) {
+          goToCell(target.row, target.col);
+        }
+      }
+
       // 🔹 Fetch and show active cell elements (with possible links)
       function updateCellElements() {
         google.script.run.withSuccessHandler(function(elements) {
@@ -90,23 +135,6 @@
 
       // 🔹 Poll every 1s to detect cell change
       setInterval(updateCellElements, 1000);
-
-      // Fetch and display cell history
-      function updateCellHistory() {
-        google.script.run.withSuccessHandler(function(history) {
-          const container = document.getElementById('historyList');
-          if (history.length > 0) {
-            let html = '<ul>';
-            history.slice().reverse().forEach(entry => {
-              html += `<li><a onclick="goToCell(${entry.row}, ${entry.col})">Row ${entry.row}, Col ${entry.col}</a></li>`;
-            });
-            html += '</ul>';
-            container.innerHTML = html;
-          } else {
-            container.innerHTML = '<em>(none yet)</em>';
-          }
-        }).getCellHistory();
-      }
 
       // Call on load and poll every 1s
       updateCellHistory();

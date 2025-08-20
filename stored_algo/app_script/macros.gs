@@ -185,4 +185,3 @@ function getCellHistory() {
   const history = props.getProperty('cellHistory');
   return history ? JSON.parse(history) : [];
 }
-
