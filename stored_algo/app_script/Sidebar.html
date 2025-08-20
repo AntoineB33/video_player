@@ -97,7 +97,7 @@
 
       // Increment index and jump
       function jumpNext() {
-        if (historyIndex >= cachedHistory.length - 1) return;
+        if (historyIndex == cachedHistory.length - 1) return;
         historyIndex++;
 
         document.getElementById('historyIndex').textContent = historyIndex;
@@ -105,7 +105,11 @@
         const target = cachedHistory[cachedHistory.length - 1 - historyIndex]; 
         // because we reversed display order
         if (target) {
-          goToCell(target.row, target.col);
+          google.script.run
+            .withSuccessHandler(() => {
+              goToCell(target.row, target.col);
+            })
+            .setPendingHistoryIndex(historyIndex);
         }
       }
 
@@ -140,6 +144,33 @@
       updateCellHistory();
       setInterval(updateCellHistory, 1000);
 
+      // Remember lastActiveCell to detect natural selection change
+      let lastActiveCell = null;
+
+      function checkSelectionChange() {
+        google.script.run.withSuccessHandler(function(current) {
+          if (!current) return;
+
+          const cellId = current.row + ":" + current.col;
+          if (lastActiveCell !== null && lastActiveCell !== cellId) {
+            // Selection changed
+            if (historyIndex !== 0) {
+              historyIndex = 0;
+              document.getElementById('historyIndex').textContent = historyIndex;
+              google.script.run
+                .withSuccessHandler(() => {
+                  updateCellHistory();
+                })
+                .setPendingHistoryIndex(historyIndex);
+
+            }
+          }
+          lastActiveCell = cellId;
+        }).getActiveCellInfo();
+      }
+
+      // Run check every 1s
+      setInterval(checkSelectionChange, 1000);
 
       function find() {
         const findText = document.getElementById('findText').value.trim();
