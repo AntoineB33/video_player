@@ -45,7 +45,8 @@
       <div>
         Index: <span id="historyIndex">0</span>
       </div>
-      <button onclick="jumpNext()">Jump to Next in History</button>
+      <button onclick="jumpBackward()">Jump to Previous in History</button>
+      <button onclick="jumpForward()">Jump to Next in History</button>
     </div>
 
     <!-- 🔹 History of visited cells -->
@@ -74,18 +75,51 @@
 
     <script>
 
-      let historyIndex = 0;
       let cachedHistory = [];
+      let historyIndList = [];
+      let currentSelectedTimestamp = null;
 
       // Fetch and display cell history
       function updateCellHistory() {
         google.script.run.withSuccessHandler(function(history) {
-          cachedHistory = history; // store globally
+          let foundIndex = -1;
+          const found = history.slice().reverse().find((entry, idx) => {
+            if (entry.timestamp === currentSelectedTimestamp) {
+              foundIndex = idx;
+              return true;
+            }
+            return false;
+          });
+          if (!found) {
+            cachedHistory.push(...history);
+            historyIndList = [cachedHistory.length - 1];
+          } else if (foundIndex) {
+            let diff = 0;
+            const found = history.slice(history.length - foundIndex, historyIndList.length - 1).find((entry, idx) => {
+              diff++;
+              return !(entry.row === cachedHistory[historyIndList[diff]].row && entry.col === cachedHistory[historyIndList[diff]].col);
+            });
+            if (!found) {
+              if (foundIndex > historyIndList.length - 1) {
+                cachedHistory.splice(historyIndList[historyIndList.length - 1] + 1, cachedHistory.length, ...history.slice(foundIndex));
+                historyIndList = [cachedHistory.length - 1];
+              } else {
+                historyIndList.splice(0, foundIndex);
+              }
+            } else {
+              cachedHistory.splice(historyIndList[diff - 1] + 1, cachedHistory.length, ...history.slice(diff - 1));
+              historyIndList = [cachedHistory.length - 1];
+            }
+          } else {
+            return;
+          }
+          currentSelectedTimestamp = history[history.length - 1].timestamp;
+          document.getElementById('historyIndex').textContent = cachedHistory.length - 1 - historyIndList[historyIndList.length - 1];
           const container = document.getElementById('historyList');
-          if (history.length > 0) {
+          if (cachedHistory.length > 0) {
             let html = '<ul>';
-            history.slice().reverse().forEach((entry, idx) => {
-              html += `<li><a onclick="goToCell(${entry.row}, ${entry.col})">[${history.length - 1 - idx}] Row ${entry.row}, Col ${entry.col}</a></li>`;
+            cachedHistory.slice().reverse().forEach((entry, idx) => {
+              html += `<li><a onclick="goToCell(${entry.row}, ${entry.col})">Row ${entry.row}, Col ${entry.col}</a></li>`;
             });
             html += '</ul>';
             container.innerHTML = html;
@@ -95,21 +129,41 @@
         }).getCellHistory();
       }
 
-      // Increment index and jump
-      function jumpNext() {
-        if (historyIndex == cachedHistory.length - 1) return;
-        historyIndex++;
+      function jumpBackward() {
+        // document.getElementById('historyIndex').textContent = cachedHistory.length - 1;
+        // setTimeout(() => {
+        //   document.getElementById('historyIndex').textContent = cachedHistory.length - 1 - historyIndList[historyIndList.length - 1];
+        // }, 1000);
+        if (historyIndList[historyIndList.length - 1] == 0) return;
+        historyIndList.push(historyIndList[historyIndList.length - 1] - 1);
+        const target = cachedHistory[historyIndList[historyIndList.length - 1]];
+        goToCell(target.row, target.col);
+      }
 
-        document.getElementById('historyIndex').textContent = historyIndex;
-
-        const target = cachedHistory[cachedHistory.length - 1 - historyIndex]; 
-        // because we reversed display order
-        if (target) {
-          google.script.run
-            .withSuccessHandler(() => {
-              goToCell(target.row, target.col);
-            })
-            .setPendingHistoryIndex(historyIndex);
+      function jumpForward() {
+        document.getElementById('historyIndex').textContent = 300;
+        setTimeout(() => {
+          document.getElementById('historyIndex').textContent = historyIndList.length;
+        }, 1000);
+        setTimeout(() => {
+          document.getElementById('historyIndex').textContent = 100;
+        }, 1000);
+        setTimeout(() => {
+          document.getElementById('historyIndex').textContent = 200;
+        }, 1000);
+        setTimeout(() => {
+          document.getElementById('historyIndex').textContent = cachedHistory.length - 1;
+        }, 1000);
+        setTimeout(() => {
+          document.getElementById('historyIndex').textContent = 100;
+        }, 1000);
+        setTimeout(() => {
+          document.getElementById('historyIndex').textContent = cachedHistory.length - 1 - historyIndList[historyIndList.length - 1];
+        }, 1000);
+        if (historyIndList[historyIndList.length - 1] == cachedHistory.length - 1) {
+          historyIndList.push(historyIndList[historyIndList.length - 1] + 1);
+          const target = cachedHistory[historyIndList[historyIndList.length - 1]];
+          goToCell(target.row, target.col);
         }
       }
 
@@ -143,34 +197,6 @@
       // Call on load and poll every 1s
       updateCellHistory();
       setInterval(updateCellHistory, 1000);
-
-      // Remember lastActiveCell to detect natural selection change
-      let lastActiveCell = null;
-
-      function checkSelectionChange() {
-        google.script.run.withSuccessHandler(function(current) {
-          if (!current) return;
-
-          const cellId = current.row + ":" + current.col;
-          if (lastActiveCell !== null && lastActiveCell !== cellId) {
-            // Selection changed
-            if (historyIndex !== 0) {
-              historyIndex = 0;
-              document.getElementById('historyIndex').textContent = historyIndex;
-              google.script.run
-                .withSuccessHandler(() => {
-                  updateCellHistory();
-                })
-                .setPendingHistoryIndex(historyIndex);
-
-            }
-          }
-          lastActiveCell = cellId;
-        }).getActiveCellInfo();
-      }
-
-      // Run check every 1s
-      setInterval(checkSelectionChange, 1000);
 
       function find() {
         const findText = document.getElementById('findText').value.trim();

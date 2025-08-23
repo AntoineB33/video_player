@@ -745,12 +745,16 @@ def accumulate_dependencies(graph, warnings):
             return result[node]
 
         path.append(node)
+        if (node == 28):
+            print("Node 28 reached")
         accumulated = dict(graph[node])
         for neighbor in graph[node]:
             if neighbor not in graph:
                 continue
             res = dfs(neighbor, path.copy(), warnings)
             for key, value in res.items():
+                if node == 28 and key == 4:
+                    print(f"Node 28 has a dependency on {key}")
                 accumulated[key] = tuple(value)
                 accumulated[key][1].append(node)
                 if key in graph[node]:
@@ -804,6 +808,9 @@ def sorter(table, roles, errors, warnings, preload_thread, fst_row, fst_col):
                     match = re.search(r" -(\w+)$", name)
                     if "_" in name or ":" in name or "|" in name or (match and match.group(1) not in ["fst", "lst"]):
                         errors.append(f"Error in row {i}, column {alph[j]}: {name!r} contains invalid characters (_ : | -)")
+                    match = re.search(r"(\(\d+\))$", name)
+                    if match:
+                        errors.append(f"Error in row {i}, column {alph[j]}: {name!r} contains invalid parentheses")
                     if name in ["fst", "lst"]:
                         errors.append(f"Error in row {i}, column {alph[j]}: {name!r} is a reserved name")
                     if name in names:
@@ -868,7 +875,9 @@ def sorter(table, roles, errors, warnings, preload_thread, fst_row, fst_col):
         if row[path_index] and i in attributes:
             for k in attributes[i].keys():
                 if urls[k][0]:
-                    errors.append(f"Error in row {i}, column {alph[path_index]}: a URL given by {' -> '.join([str(x) for x in urls[i][1]])} conflicts with another given by {' -> '.join([str(x) for x in attributes[i][k][1]])}")
+                    path1 = ' -> '.join([f"{table[x][0].split('; ')[0]}({x})" for x in urls[i][1]])
+                    path2 = ' -> '.join([f"{table[x][0].split('; ')[0]}({x})" for x in attributes[i][k][1]])
+                    errors.append(f"Error in row {i}, column {alph[path_index]}: a URL given by {path1} conflicts with another given by {path2}")
                     return
                 urls[k] = (row[path_index], attributes[i][k][1])
     valid_row_indexes = []
@@ -977,14 +986,15 @@ def sorter(table, roles, errors, warnings, preload_thread, fst_row, fst_col):
                 for x2 in instr_table[j]:
                     x = copy.deepcopy(x2)
                     if x not in instr_table[i]:
+                        if i == 4 and 16 in x.numbers:
+                            print("h")
                         x.path = attributes[j][i][1] + x.path
                         instr_table_ext[i].append(x)
                     elif len(instr_table[i][instr_table[i].index(x)].path) == 1:
                         warnings.append(f"Redundant instruction {x!r} in row {i}, column {alph[j]} given by {' -> '.join([str(x) for x in attributes[j][i][1] + x.path])}")
-    instr_table = instr_table_ext
     instr_table_int = []
     for i in valid_row_indexes:
-        instr_table_int.append(list(set(instr_table[i])))
+        instr_table_int.append(list(set(instr_table_ext[i])))
     instr_table = instr_table_int
     # detect cycles in instr_table
     def has_cycle(instr_table, visited, stack, node, after=True):
@@ -1007,7 +1017,7 @@ def sorter(table, roles, errors, warnings, preload_thread, fst_row, fst_col):
         stack = []
         for i in range(len(instr_table)):
             if has_cycle(instr_table, visited, stack, i, p):
-                errors.append(f"Cycle detected: {(' after ' if p else ' before ').join(['->'.join([str(x) for x in k]) for k in stack])}")
+                errors.append(f"Cycle detected: {(' after ' if p else ' before ').join(['->'.join([f"{table[x][0].split('; ')[0]}({x})" for x in k]) for k in stack])}")
                 return
     urls = [urls[i][0] for i in valid_row_indexes]
     saved["data"] = {

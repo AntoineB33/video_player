@@ -5,6 +5,10 @@ function onOpen() {
     .addToUi();
 }
 
+function clearAllProperties() {
+  PropertiesService.getScriptProperties().deleteAllProperties();
+}
+
 function showSidebar() {
   const html = HtmlService.createHtmlOutputFromFile('Sidebar')
     .setTitle('Find & Replace Enhanced');
@@ -72,20 +76,6 @@ function replaceMatches(findText, replaceText) {
  */
 function activateCell(row, col) {
   SpreadsheetApp.getActiveSheet().getRange(row, col).activate();
-}
-
-/**
- * Returns the elements of the currently active cell,
- * split by "; " and trimmed.
- */
-function getActiveCellElements() {
-  const cell = SpreadsheetApp.getActiveRange();
-  if (!cell) return [];
-  
-  const value = cell.getValue();
-  if (typeof value !== 'string') return [];
-  
-  return value.split(';').map(s => s.trim()).filter(s => s);
 }
 
 /**
@@ -159,31 +149,10 @@ function onSelectionChange(e) {
     col: e.range.getColumn(),
     timestamp: new Date().toISOString()
   };
+  history.push(newCell);
+  if (history.length > 5) history.shift();
 
-  const pendingIndex = props.getProperty('pendingHistoryIndex') - 1;
-  const pastSelect = history.length > 0 ? history[history.length - 1 - pendingIndex] : null;
-
-  if (!pastSelect || pastSelect.row !== newCell.row || pastSelect.col !== newCell.col) {
-    // If sidebar has a nonzero index, it will tell us to truncate (via property)
-    if (pendingIndex && Number(pendingIndex) > 0) {
-      const cutLength = history.length - Number(pendingIndex);
-      history = history.slice(0, cutLength);
-      props.deleteProperty('pendingHistoryIndex');
-    }
-
-    const newCell2 = {
-      row: pastSelect.row - newCell.row,
-      col: pastSelect.col - newCell.col,
-      timestamp: new Date().toISOString()
-    };
-    history.push(newCell2);
-    history.push(newCell);
-
-    // keep max 5
-    if (history.length > 5) history.shift();
-
-    props.setProperty('cellHistory', JSON.stringify(history));
-  }
+  props.setProperty('cellHistory', JSON.stringify(history));
 }
 
 /**
@@ -193,14 +162,4 @@ function getCellHistory() {
   const props = PropertiesService.getScriptProperties();
   const history = props.getProperty('cellHistory');
   return history ? JSON.parse(history) : [];
-}
-
-function setPendingHistoryIndex(index) {
-  PropertiesService.getScriptProperties().setProperty('pendingHistoryIndex', index);
-}
-
-function getActiveCellInfo() {
-  const cell = SpreadsheetApp.getActiveRange();
-  if (!cell) return null;
-  return { row: cell.getRow(), col: cell.getColumn() };
 }
