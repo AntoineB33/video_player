@@ -745,18 +745,13 @@ def accumulate_dependencies(graph, warnings):
             return result[node]
 
         path.append(node)
-        if (node == 28):
-            print("Node 28 reached")
         accumulated = dict(graph[node])
         for neighbor in graph[node]:
             if neighbor not in graph:
                 continue
             res = dfs(neighbor, path.copy(), warnings)
             for key, value in res.items():
-                if node == 28 and key == 4:
-                    print(f"Node 28 has a dependency on {key}")
-                accumulated[key] = tuple(value)
-                accumulated[key][1].append(node)
+                accumulated[key] = (value[0], list(value[1]) + [node])
                 if key in graph[node]:
                     warnings.append(f"Warning: {key!r} has a redundant dependency {node!r} given by {' -> '.join([str(x) for x in accumulated[key][1]])}")
         path.pop()
@@ -916,20 +911,24 @@ def sorter(table, roles, errors, warnings, preload_thread, fst_row, fst_col):
             while t in fst_cat:
                 t = fst_cat[t]
             for i in attributes[t].keys():
-                instr_table[i].append(instr_struct(True, False, [new_indexes[k]], [(-float("inf"), -1)]))
+                if i != k:
+                    instr_table[i].append(instr_struct(True, False, [new_indexes[k]], [(-float("inf"), -1)]))
     for k, v in lst_cat.items():
         if is_valid[k]:
             t = v
             while t in lst_cat:
                 t = lst_cat[t]
             for i in attributes[t].keys():
-                instr_table[i].append(instr_struct(True, False, [new_indexes[k]], [(1, float("inf"))]))
+                if i != k:
+                    instr_table[i].append(instr_struct(True, False, [new_indexes[k]], [(1, float("inf"))]))
     if first_element is not None:
         for i in valid_row_indexes:
-            instr_table[i].append(instr_struct(True, False, [new_indexes[first_element]], [(-float("inf"), -1)]))
+            if i != first_element:
+                instr_table[i].append(instr_struct(True, False, [new_indexes[first_element]], [(-float("inf"), -1)]))
     if last_element is not None:
         for i in valid_row_indexes:
-            instr_table[i].append(instr_struct(True, False, [new_indexes[last_element]], [(1, float("inf"))]))
+            if i != last_element:
+                instr_table[i].append(instr_struct(True, False, [new_indexes[last_element]], [(1, float("inf"))]))
     dep_pattern = [cell.split('.') for cell in table[0]]
     for i, row in enumerate(table[1:], start=1):
         if not table[i][path_index] and i not in attributes:
@@ -1008,8 +1007,12 @@ def sorter(table, roles, errors, warnings, preload_thread, fst_row, fst_col):
                 if target not in visited:
                     if has_cycle(instr_table, visited, stack, target, after):
                         return True
-                elif any(target == k[0] for k in stack):
-                    return True
+                else:
+                    idx = next((i for i, k in enumerate(stack) if k[0] == to_old_indexes[target]), None)
+                    if idx:
+                        # remove the idx first elements without creating a new list
+                        stack[:] = stack[idx:] + [[to_old_indexes[target]]]
+                        return True
         stack.pop()
         return False
     for p in [0, 1]:
@@ -1042,9 +1045,9 @@ def sorter(table, roles, errors, warnings, preload_thread, fst_row, fst_col):
 if __name__ == "__main__":
     preload_thread = threading.Thread(target=preload_ortools, daemon=True)
     preload_thread.start()
-    # clipboard_content = pyperclip.paste()
-    with open('data/test.txt', 'r') as f:
-        clipboard_content = f.read()
+    clipboard_content = pyperclip.paste()
+    # with open('data/test.txt', 'r') as f:
+    #     clipboard_content = f.read()
     table = [line.split('\t') for line in re.split(r'\r?\n', clipboard_content)]
     crop_line = len(table)
     crop_column = len(table[0])
