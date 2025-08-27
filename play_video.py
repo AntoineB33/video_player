@@ -2,7 +2,7 @@ import os
 import sys
 import ctypes
 from encrypt import get_playlist_status
-from config import DECRYPTED_MEDIA_PATH, PLAYLISTS_PATH, DEFAULT_PLAYLIST_FILE
+from config import DECRYPTED_MEDIA_PATH, PLAYLISTS_PATH
 import pickle
 
 # --- NEW: Import pynput ---
@@ -181,9 +181,6 @@ if __name__ == "__main__":
             messagebox.showerror("Error", "No valid media found in playlist!")
             sys.exit(1)
         playlist = [os.path.join(DECRYPTED_MEDIA_PATH, video) for video in playlist["media"]]
-        # Use pickle to save default playlist name
-        with open(DEFAULT_PLAYLIST_FILE, "wb") as f:
-            pickle.dump(playlist_name, f)
         root = tk.Tk()
         app = FullscreenPlayer(root, playlist)
         root.mainloop()

@@ -36,10 +36,8 @@ def files_with_same_stem(base: Path):
     matches = [p for p in parent.glob(f"{stem}.*") if p.is_file()]
     return matches
 
-def get_playlist_status(show_missings = True, ask_if_no_default = False, get_all_videos = False, only_numbers = False):
+def get_playlist_status(given_default = None, show_missings = True, get_all_videos = False, only_numbers = False):
     # --- Ask user for playlist name via CMD ---
-    if not get_all_videos:
-        print("available playlists:")
     os.makedirs(PLAYLISTS_PATH, exist_ok=True)
     os.makedirs(DECRYPTED_MEDIA_PATH, exist_ok=True)
     os.makedirs(ENCRYPTED_MEDIA_PATH, exist_ok=True)
@@ -53,8 +51,6 @@ def get_playlist_status(show_missings = True, ask_if_no_default = False, get_all
     with open(DEFAULT_PLAYLIST_FILE, "rb") as f:
         default_playlist = pickle.load(f)
     
-    if ask_if_no_default and default_playlist is not None and default_playlist in all_playlists:
-        return {}, default_playlist
     playlists = {}
     playlist_infos = []
     for file in all_playlists:
@@ -62,29 +58,28 @@ def get_playlist_status(show_missings = True, ask_if_no_default = False, get_all
         if_default = default_playlist is not None and file == default_playlist
         if if_default:
             suffix = " (default)"
-        if not ask_if_no_default:
-            playlists[file] = {"media":[], "not_decrypted": [], "missing": []}
-            file_path = os.path.join(PLAYLISTS_PATH, file)
-            with open(file_path, 'rb') as f:
-                saved = pickle.load(f)
-                playlists[file].update(saved)
-            if show_missings:
-                urls = playlists[file]["data"]["urls"]
-                for i, url in enumerate(urls):
-                    path = url_to_filename(url)
-                    files_found = files_with_same_stem(Path(DECRYPTED_MEDIA_PATH) / path)
+        playlists[file] = {"media":[], "not_decrypted": [], "missing": []}
+        file_path = os.path.join(PLAYLISTS_PATH, file)
+        with open(file_path, 'rb') as f:
+            saved = pickle.load(f)
+            playlists[file].update(saved)
+        if show_missings:
+            urls = playlists[file]["data"]["urls"]
+            for i, url in enumerate(urls):
+                path = url_to_filename(url)
+                files_found = files_with_same_stem(Path(DECRYPTED_MEDIA_PATH) / path)
+                if files_found:
+                    playlists[file]["media"].append(files_found[0])
+                else:
+                    files_found = files_with_same_stem(Path(ENCRYPTED_MEDIA_PATH) / path)
                     if files_found:
-                        playlists[file]["media"].append(files_found[0])
+                        playlists[file]["not_decrypted"].append(files_found[0])
+                        if not only_numbers:
+                            suffix += f"\n\t(medium {i + 1} not decrypted: {url})"
                     else:
-                        files_found = files_with_same_stem(Path(ENCRYPTED_MEDIA_PATH) / path)
-                        if files_found:
-                            playlists[file]["not_decrypted"].append(files_found[0])
-                            if not only_numbers:
-                                suffix += f"\n\t(medium {i + 1} not decrypted: {url})"
-                        else:
-                            playlists[file]["missing"].append(url)
-                            if not only_numbers:
-                                suffix += f"\n\t(medium {i + 1} missing: {url})"
+                        playlists[file]["missing"].append(url)
+                        if not only_numbers:
+                            suffix += f"\n\t(medium {i + 1} missing: {url})"
         if only_numbers:
             suffix += f"\tmissing: {len(playlists[file]['missing'])}, not decrypted: {len(playlists[file]['not_decrypted'])}"
         playlist_infos.append((file, suffix, if_default))
@@ -92,31 +87,38 @@ def get_playlist_status(show_missings = True, ask_if_no_default = False, get_all
     if get_all_videos:
         return playlists, default_playlist
 
-    for idx, (file, suffix, if_default) in enumerate(playlist_infos, 1):
-        print(f"{idx}. {file}{suffix}")
+    ask_input = not given_default or given_default not in all_playlists
+    if ask_input:
+        print("available playlists:")
+        for idx, (file, suffix, if_default) in enumerate(playlist_infos, 1):
+            print(f"{idx}. {file}{suffix}")
 
-    playlist_name = ""
-    selection = input("Select playlist by number or enter name: ").strip()
-    if selection.isdigit():
-        idx = int(selection) - 1
-        if 0 <= idx < len(playlist_infos):
-            playlist_name = playlist_infos[idx][0]
-    elif not selection:
-        if default_playlist is not None and default_playlist in all_playlists:
-            playlist_name = default_playlist
+        playlist_name = ""
+        selection = input("Select playlist by number or enter name: ").strip()
+        if selection.isdigit():
+            idx = int(selection) - 1
+            if 0 <= idx < len(playlist_infos):
+                playlist_name = playlist_infos[idx][0]
+        elif not selection:
+            if default_playlist is not None and default_playlist in all_playlists:
+                playlist_name = default_playlist
+            else:
+                playlist_name = all_playlists[0]
         else:
-            playlist_name = all_playlists[0]
+            if selection in all_playlists:
+                playlist_name = selection
+            else:
+                for file in all_playlists:
+                    if file.startswith(selection):
+                        playlist_name = file
+                        break
+        if not playlist_name:
+            input("Error: No valid playlist selected!")
+            exit(1)
     else:
-        if selection in all_playlists:
-            playlist_name = selection
-        else:
-            for file in all_playlists:
-                if file.startswith(selection):
-                    playlist_name = file
-                    break
-    if not playlist_name:
-        input("Error: No valid playlist selected!")
-        exit(1)
+        playlist_name = given_default
+    with open(DEFAULT_PLAYLIST_FILE, "wb") as f:
+        pickle.dump(playlist_name, f)
     return playlists, playlist_name
 
 if __name__ == "__main__":
@@ -126,9 +128,6 @@ if __name__ == "__main__":
         playlist = playlists.get(playlist_name, [])
         if not playlist:
             raise ValueError("No valid media found in playlist!")
-        # Use pickle to save default playlist name
-        with open(DEFAULT_PLAYLIST_FILE, "wb") as f:
-            pickle.dump(playlist_name, f)
         # decrypt all files in the playlist
         for medium in playlist["not_decrypted"]:
             try:

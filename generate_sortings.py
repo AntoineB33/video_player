@@ -12,7 +12,7 @@ import pickle
 import time
 import pyperclip
 import copy
-from config import PLAYLISTS_PATH
+from config import PLAYLISTS_PATH, TABLES_PATH
 
 ROLES = ['path', 'names', 'attributes', 'dependencies', 'sprawl']
 PATTERN_DISTANCE = r'^(?P<prefix>as far as possible from )(?P<any>any)?((?P<number>\d+)|(?P<name>.+))(?P<suffix>)$'
@@ -145,6 +145,7 @@ class EfficientConstraintSorter:
         self.solver.parameters.max_time_in_seconds = time_limit_seconds
 
         self.file_path = os.path.join(PLAYLISTS_PATH, self.table[0][0]+".pkl")
+        self.table_path = os.path.join(TABLES_PATH, self.table[0][0]+"_table.txt")
         if os.path.exists(self.file_path):
             with open(self.file_path, "rb") as f:
                 prev_sorting = pickle.load(f)
@@ -423,7 +424,7 @@ class EfficientConstraintSorter:
             for_pyperclip = '\n'.join(['\t'.join(row) for row in result])
             if in_pyperclip:
                 pyperclip.copy(for_pyperclip)
-            with open(self.file_path.replace(".pkl", "_table.txt"), 'w', encoding='utf-8') as f:
+            with open(self.table_path, 'w', encoding='utf-8') as f:
                 f.write(for_pyperclip)
         with open(self.file_path, 'wb') as f:
             pickle.dump(saved, f)
