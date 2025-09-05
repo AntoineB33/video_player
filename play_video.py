@@ -15,6 +15,7 @@ from tkinter import messagebox
 import vlc
 import threading
 import time
+from PIL import Image, ImageTk, ImageSequence
 from generate_sortings import instr_struct
 from encrypt import get_playlist_status
 from config import DECRYPTED_MEDIA_PATH, PLAYLISTS_PATH, DEFAULT_MUSICS_FILE
@@ -23,6 +24,11 @@ from config import DECRYPTED_MEDIA_PATH, PLAYLISTS_PATH, DEFAULT_MUSICS_FILE
 GWL_STYLE = -16
 WS_CURSOR = 0x0001  # Cursor visibility flag
 MUSIC_VOLUME = 30  # Volume for background music (0-100)
+
+# Image and GIF constants
+IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp'}
+GIF_EXTENSIONS = {'.gif'}
+VIDEO_EXTENSIONS = {'.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm', '.m4v'}
 
 class FullscreenPlayer:
     def __init__(self, master, playlist, musics, playlist_name):
@@ -40,6 +46,16 @@ class FullscreenPlayer:
         self.video_has_audio = True
         self.music_enabled = True
         
+        # NEW: Image/GIF handling attributes
+        self.current_media_type = None  # 'video', 'image', or 'gif'
+        self.image_label = None
+        self.gif_frames = []
+        self.gif_frame_index = 0
+        self.gif_duration = 0
+        self.gif_animation_id = None
+        self.gif_start_time = 0
+        self.gif_total_duration = 0
+        
         if not self.playlist:
             messagebox.showerror("Error", "Playlist is empty!")
             master.destroy()
@@ -48,8 +64,16 @@ class FullscreenPlayer:
         master.attributes('-fullscreen', True)
         master.attributes('-topmost', True)
         master.configure(bg='black')
-        self.video_frame = tk.Frame(master, bg='black')
-        self.video_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Create container for both video and image display
+        self.media_frame = tk.Frame(master, bg='black')
+        self.media_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Video frame for VLC
+        self.video_frame = tk.Frame(self.media_frame, bg='black')
+        
+        # Label for images and GIFs
+        self.image_label = tk.Label(self.media_frame, bg='black')
 
         self.hide_cursor()
         
@@ -87,7 +111,163 @@ class FullscreenPlayer:
         self.listener = keyboard.Listener(on_press=self.on_press)
         self.listener.start()
 
-        self.load_video()
+        self.load_media()
+    
+    def get_media_type(self, file_path):
+        """Determine the type of media file"""
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext in IMAGE_EXTENSIONS:
+            return 'image'
+        elif ext in GIF_EXTENSIONS:
+            return 'gif'
+        elif ext in VIDEO_EXTENSIONS:
+            return 'video'
+        else:
+            # Default to video for unknown extensions
+            return 'video'
+    
+    def hide_video_show_image(self):
+        """Hide video frame and show image label"""
+        self.video_frame.pack_forget()
+        self.image_label.pack(fill=tk.BOTH, expand=True)
+    
+    def hide_image_show_video(self):
+        """Hide image label and show video frame"""
+        self.image_label.pack_forget()
+        self.video_frame.pack(fill=tk.BOTH, expand=True)
+    
+    def stop_gif_animation(self):
+        """Stop any running GIF animation"""
+        if self.gif_animation_id:
+            self.master.after_cancel(self.gif_animation_id)
+            self.gif_animation_id = None
+    
+    def load_image(self, image_path):
+        """Load and display a static image"""
+        try:
+            # Load and resize image to fit screen
+            screen_width = self.master.winfo_screenwidth()
+            screen_height = self.master.winfo_screenheight()
+            
+            img = Image.open(image_path)
+            
+            # Calculate scaling to fit screen while maintaining aspect ratio
+            img_ratio = img.width / img.height
+            screen_ratio = screen_width / screen_height
+            
+            if img_ratio > screen_ratio:
+                # Image is wider relative to screen
+                new_width = screen_width
+                new_height = int(screen_width / img_ratio)
+            else:
+                # Image is taller relative to screen
+                new_height = screen_height
+                new_width = int(screen_height * img_ratio)
+            
+            img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+            photo = ImageTk.PhotoImage(img)
+            
+            self.image_label.configure(image=photo)
+            self.image_label.image = photo  # Keep a reference
+            
+            self.hide_video_show_image()
+            
+            # Start background music for static images
+            if self.music_enabled and self.music_playlist:
+                self.start_background_music()
+            
+            print(f"Loaded image: {os.path.basename(image_path)}")
+            
+        except Exception as e:
+            print(f"Error loading image {image_path}: {e}")
+            self.next_video()
+    
+    def load_gif(self, gif_path):
+        """Load and display an animated GIF"""
+        try:
+            # Load GIF and extract frames
+            img = Image.open(gif_path)
+            self.gif_frames = []
+            self.gif_total_duration = 0
+            
+            screen_width = self.master.winfo_screenwidth()
+            screen_height = self.master.winfo_screenheight()
+            
+            # Calculate scaling
+            img_ratio = img.width / img.height
+            screen_ratio = screen_width / screen_height
+            
+            if img_ratio > screen_ratio:
+                new_width = screen_width
+                new_height = int(screen_width / img_ratio)
+            else:
+                new_height = screen_height
+                new_width = int(screen_height * img_ratio)
+            
+            # Extract all frames
+            for frame in ImageSequence.Iterator(img):
+                # Get frame duration (in milliseconds)
+                duration = frame.info.get('duration', 100)  # Default 100ms if not specified
+                self.gif_total_duration += duration
+                
+                # Resize and convert frame
+                frame = frame.convert('RGBA')
+                frame = frame.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                photo = ImageTk.PhotoImage(frame)
+                
+                self.gif_frames.append({
+                    'image': photo,
+                    'duration': duration
+                })
+            
+            # Convert total duration to seconds
+            self.gif_total_duration = self.gif_total_duration / 1000.0
+            
+            self.hide_video_show_image()
+            
+            # Start background music for GIFs
+            if self.music_enabled and self.music_playlist:
+                self.start_background_music()
+            
+            # Start GIF animation
+            self.gif_frame_index = 0
+            self.gif_start_time = time.time()
+            self.animate_gif()
+            
+            print(f"Loaded GIF: {os.path.basename(gif_path)} ({len(self.gif_frames)} frames, {self.gif_total_duration:.1f}s)")
+            
+        except Exception as e:
+            print(f"Error loading GIF {gif_path}: {e}")
+            self.next_video()
+    
+    def animate_gif(self):
+        """Animate the GIF by cycling through frames"""
+        if not self.gif_frames or self.current_media_type != 'gif':
+            return
+        
+        # Display current frame
+        current_frame = self.gif_frames[self.gif_frame_index]
+        self.image_label.configure(image=current_frame['image'])
+        
+        # Move to next frame
+        self.gif_frame_index = (self.gif_frame_index + 1) % len(self.gif_frames)
+        
+        # Check if we completed a full cycle
+        if self.gif_frame_index == 0:
+            elapsed_time = time.time() - self.gif_start_time
+            
+            # If GIF is 30 seconds or longer, or if we've been playing for more than 30 seconds, go to next media
+            if self.gif_total_duration >= 30.0 or elapsed_time >= 30.0:
+                print(f"GIF finished (duration: {self.gif_total_duration:.1f}s, played: {elapsed_time:.1f}s)")
+                self.next_video()
+                return
+            
+            # Otherwise, loop the animation
+            self.gif_start_time = time.time()  # Reset timer for next loop
+        
+        # Schedule next frame
+        duration = current_frame['duration']
+        self.gif_animation_id = self.master.after(duration, self.animate_gif)
     
     # NEW: Setup music player
     def setup_music_player(self):
@@ -177,14 +357,14 @@ class FullscreenPlayer:
             return
         
         self.current_music_index = (self.current_music_index + 1) % len(self.music_playlist)
-        if not self.video_has_audio and self.music_enabled:
+        if (self.current_media_type in ['image', 'gif'] or not self.video_has_audio) and self.music_enabled:
             self.start_background_music()
     
     # NEW: Toggle music on/off
     def toggle_music(self):
         """Toggle background music on/off"""
         self.music_enabled = not self.music_enabled
-        if self.music_enabled and not self.video_has_audio:
+        if self.music_enabled and (self.current_media_type in ['image', 'gif'] or not self.video_has_audio):
             self.start_background_music()
         else:
             self.stop_background_music()
@@ -194,7 +374,7 @@ class FullscreenPlayer:
     def on_press(self, key):
         try:
             # Handle character keys (for numbers 0-9)
-            if '0' <= key.char <= '9':
+            if '0' <= key.char <= '9' and self.current_media_type == 'video':
                 self.seek_to_percentage(int(key.char) / 10.0)
             elif key.char == 'n':
                 self.next_video()
@@ -207,9 +387,9 @@ class FullscreenPlayer:
             # Handle special keys (like arrow keys, escape, etc.)
             if key == keyboard.Key.esc:
                 self.quit_player()
-            elif key == keyboard.Key.right:
+            elif key == keyboard.Key.right and self.current_media_type == 'video':
                 self.seek_forward()
-            elif key == keyboard.Key.left:
+            elif key == keyboard.Key.left and self.current_media_type == 'video':
                 self.seek_backward()
 
     def hide_cursor(self):
@@ -241,53 +421,74 @@ class FullscreenPlayer:
         self.seeking = False
 
     def seek_forward(self):
-        if self.player.is_playing():
+        if self.player.is_playing() and self.current_media_type == 'video':
             self.perform_seek(5000)
 
     def seek_backward(self):
-        if self.player.is_playing():
+        if self.player.is_playing() and self.current_media_type == 'video':
             self.perform_seek(-5000)
 
     def perform_seek(self, offset_ms):
-        self.seeking = True
-        current_time = self.player.get_time()
-        target_time = max(0, current_time + offset_ms)
-        self.player.set_time(target_time)
+        if self.current_media_type == 'video':
+            self.seeking = True
+            current_time = self.player.get_time()
+            target_time = max(0, current_time + offset_ms)
+            self.player.set_time(target_time)
 
     def seek_to_percentage(self, ratio):
-        if self.player.is_playing():
+        if self.player.is_playing() and self.current_media_type == 'video':
             self.seeking = True
             self.player.set_position(ratio)
 
-    def load_video(self):
+    def load_media(self):
+        """Load current media (video, image, or GIF)"""
         if not 0 <= self.playlist_index < len(self.playlist):
             return
-        video_path = self.playlist[self.playlist_index]
-        if not os.path.exists(video_path):
-            messagebox.showwarning("File Missing", f"Video not found:\n{video_path}")
+        
+        media_path = self.playlist[self.playlist_index]
+        if not os.path.exists(media_path):
+            messagebox.showwarning("File Missing", f"Media not found:\n{media_path}")
             return
         
-        # NEW: Stop music when loading new video (will restart if needed)
+        # Stop any ongoing animations and music
+        self.stop_gif_animation()
         self.stop_background_music()
+        
+        # Determine media type and load accordingly
+        self.current_media_type = self.get_media_type(media_path)
+        
+        if self.current_media_type == 'image':
+            self.load_image(media_path)
+        elif self.current_media_type == 'gif':
+            self.load_gif(media_path)
+        else:  # video
+            self.load_video(media_path)
+
+    def load_video(self, video_path):
+        """Load and play a video file"""
+        self.hide_image_show_video()
         
         media = self.instance.media_new(video_path)
         self.player.set_media(media)
         self.player.play()
         self.master.after(100, lambda: self.master.focus_force())
+        
+        print(f"Loaded video: {os.path.basename(video_path)}")
 
     def next_video(self):
         if self.playlist_index < len(self.playlist) - 1:
             self.playlist_index += 1
-            self.load_video()
+            self.load_media()
 
     def prev_video(self):
         if self.playlist_index > 0:
             self.playlist_index -= 1
-            self.load_video()
+            self.load_media()
 
     def quit_player(self):
-        # --- Stop the listener and music for a clean exit ---
+        # --- Stop the listener, animations, and music for a clean exit ---
         self.listener.stop()
+        self.stop_gif_animation()
         if self.music_player:
             self.music_player.stop()
         self.player.stop()
