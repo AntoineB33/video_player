@@ -66,9 +66,27 @@ class FullscreenPlayer:
             master.destroy()
             return
 
-        master.attributes('-fullscreen', True)
-        master.attributes('-topmost', True)
+
+
+        # master.attributes('-fullscreen', True)
+        # master.attributes('-topmost', True)
+        # master.configure(bg='black')
+        
+        # --- Change: Make windowed instead of fullscreen ---
+        window_width = 1280
+        window_height = 720
+        screen_width = master.winfo_screenwidth()
+        screen_height = master.winfo_screenheight()
+        x = (screen_width // 2) - (window_width // 2)
+        y = (screen_height // 2) - (window_height // 2)
+        master.geometry(f"{window_width}x{window_height}+{x}+{y}")
         master.configure(bg='black')
+        # Remove fullscreen and topmost attributes
+        # master.attributes('-fullscreen', True)
+        # master.attributes('-topmost', True)
+
+
+
         
         # Create container for both video and image display
         self.media_frame = tk.Frame(master, bg='black')
@@ -417,7 +435,6 @@ class FullscreenPlayer:
                 self.toggle_music()
                 
         except AttributeError:
-            # Handle special keys (like arrow keys, escape, etc.)
             if key == keyboard.Key.esc:
                 self.quit_player()
             elif key == keyboard.Key.right and self.current_media_type == 'video':
@@ -490,6 +507,10 @@ class FullscreenPlayer:
         # Stop any ongoing animations and music
         self.stop_gif_animation()
         self.stop_background_music()
+        
+        # NEW: Stop the video player if we're switching to non-video media
+        if self.current_media_type == 'video' and self.get_media_type(media_path) != 'video':
+            self.player.stop()
         
         # Determine media type and load accordingly
         self.current_media_type = self.get_media_type(media_path)
