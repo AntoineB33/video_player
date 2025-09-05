@@ -6,7 +6,8 @@ if __name__ == "__main__":
     playlists, _ = get_playlist_status(get_all_videos=True)
     playlists_videos = set()
     for playlist in playlists.values():
-        playlists_videos.update(playlist.get("media", []))
+        for media_list in playlist.values():
+            playlists_videos.update(media_list)
     stored_videos = {ENCRYPTED_MEDIA_PATH: os.listdir(ENCRYPTED_MEDIA_PATH), DECRYPTED_MEDIA_PATH: os.listdir(DECRYPTED_MEDIA_PATH)}
     for folder, videos in stored_videos.items():
         print(f"Folder: {os.path.basename(folder)}\n")

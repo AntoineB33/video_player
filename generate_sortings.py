@@ -12,9 +12,17 @@ import pickle
 import time
 import pyperclip
 import copy
+import enum
 from config import PLAYLISTS_PATH, TABLES_PATH
 
-ROLES = ['path', 'names', 'attributes', 'dependencies', 'sprawl']
+class Roles(enum.Enum):
+    PATH = 'path'
+    NAMES = 'names'
+    ATTRIBUTES = 'attributes'
+    DEPENDENCIES = 'dependencies'
+    SPRAWL = 'sprawl'
+    MUSICS = 'musics'
+
 PATTERN_DISTANCE = r'^(?P<prefix>as far as possible from )(?P<any>any)?((?P<number>\d+)|(?P<name>.+))(?P<suffix>)$'
 PATTERN_AREAS = r'^(?P<prefix>.*\|)(?P<any>any)?((?P<number>\d+)|(?P<name>.+))(?P<suffix>\|.*)$'
 
@@ -52,6 +60,7 @@ class EfficientConstraintSorter:
     def __init__(self, saved, preload_thread, errors, existing_pb, to_pyperclip):
         self.saved = saved
         self.elements = saved.get("data", {}).get("elements", [])
+        self.name = saved.get("input", {}).get("name", "")
         self.table = saved.get("input", {}).get("table", [])
         self.urls = saved.get("data", {}).get("urls", [])
         self.to_old_indexes = saved.get("data", {}).get("to_old_indexes", [])
@@ -144,8 +153,8 @@ class EfficientConstraintSorter:
         self.solver = cp_model.CpSolver()
         self.solver.parameters.max_time_in_seconds = time_limit_seconds
 
-        self.file_path = os.path.join(PLAYLISTS_PATH, self.table[0][0]+".pkl")
-        self.table_path = os.path.join(TABLES_PATH, self.table[0][0]+"_table.txt")
+        self.file_path = os.path.join(PLAYLISTS_PATH, self.name+".pkl")
+        self.table_path = os.path.join(TABLES_PATH, self.name+"_table.txt")
         if os.path.exists(self.file_path):
             with open(self.file_path, "rb") as f:
                 prev_sorting = pickle.load(f)
@@ -155,6 +164,8 @@ class EfficientConstraintSorter:
         if "fst_row" in self.saved:
             prev_sorting["fst_row"] = self.saved["fst_row"]
             prev_sorting["fst_col"] = self.saved["fst_col"]
+            prev_sorting["music_col"] = self.saved["music_col"]
+            prev_sorting["musics"] = self.saved["musics"]
         to_pyperclip = self.manual
         if self.existing_pb or prev_sorting["data"] == self.saved["data"]:
             if prev_sorting["output"]["error"]:
@@ -417,6 +428,11 @@ class EfficientConstraintSorter:
         if self.manual:
             fst_row = saved["fst_row"]
             fst_col = saved["fst_col"]
+            musics = saved["musics"]
+            music_col = saved["music_col"]
+            if music_col != -1:
+                self.roles = self.roles[:music_col] + [Roles.MUSICS.value] + self.roles[music_col:]
+                new_table = [row[:music_col] + [musics[i]] + row[music_col:] for i, row in enumerate(new_table)]
             result = [self.roles] + new_table
             for i in range(len(result)):
                 result[i] = [fst_col[i]] + result[i]
@@ -764,7 +780,7 @@ def accumulate_dependencies(graph, warnings):
         dfs(node, [], warnings)
     return result
 
-def sorter(table, roles, errors, warnings, preload_thread, fst_row, fst_col):
+def sorter(name, table, roles, errors, warnings, preload_thread, fst_row, fst_col, musics, music_col):
     path_index = roles.index('path') if 'path' in roles else -1
     if path_index == -1:
         errors.append("Error: 'path' role not found in roles")
@@ -782,7 +798,7 @@ def sorter(table, roles, errors, warnings, preload_thread, fst_row, fst_col):
                         elif cells[k].endswith("-lst"):
                             cells[k] = cells[k][:-4].strip() + " -lst"
             row[j] = '; '.join(cells)
-    saved = {"input": {"table": table, "roles": roles}, "output": {"errors": errors}}
+    saved = {"input": {"name": name, "table": table, "roles": roles}, "output": {"errors": errors}}
     alph = generate_unique_strings(max(len(roles), len(table)))
     for i, row in enumerate(table[1:]):
         cell = row[path_index]
@@ -1040,6 +1056,8 @@ def sorter(table, roles, errors, warnings, preload_thread, fst_row, fst_col):
     if fst_row is not None:
         saved["fst_row"] = fst_row
         saved["fst_col"] = fst_col
+        saved["musics"] = musics
+        saved["music_col"] = music_col
     solver(saved, errors, fst_row is not None, preload_thread)
 
 
@@ -1069,15 +1087,30 @@ if __name__ == "__main__":
     errors = []
     roles = table[0]
     table = table[1:]
+    music_col = -1
+    musics = []
+    name = "default"
     for i, role in enumerate(roles):
         role = role.strip().lower()
-        if role not in ROLES:
+        if role not in [r.value for r in Roles]:
             errors.append(f"Error: Invalid role {role!r} found in roles")
             result = table
             break
+        elif role == Roles.NAMES.value:
+            name = table[0][i]
+            if name == "s":
+                errors.append("Error: 's' is a reserved name")
+                result = table
+                break
+        elif role == Roles.MUSICS.value:
+            music_col = i
         roles[i] = role
     else:
-        result = sorter(table, roles, errors, warnings, preload_thread, fst_row, fst_col)
+        if music_col != -1:
+            roles = roles[:music_col] + roles[music_col + 1:]
+            musics = [row[music_col] for row in table]
+            table = [row[:music_col] + row[music_col + 1:] for row in table]
+        result = sorter(name, table, roles, errors, warnings, preload_thread, fst_row, fst_col, musics, music_col)
     if errors:
         print("Errors found:")
         for error in errors:
