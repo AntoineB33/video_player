@@ -196,9 +196,8 @@ class FullscreenPlayer:
             
             self.hide_video_show_image()
             
-            # Start background music for static images
-            if self.music_enabled and self.music_playlist:
-                self.start_background_music()
+            # Start or resume background music for static images
+            self.play_or_resume_background_music()
             
             print(f"Loaded image: {os.path.basename(image_path)}")
             
@@ -249,9 +248,8 @@ class FullscreenPlayer:
             
             self.hide_video_show_image()
             
-            # Start background music for GIFs
-            if self.music_enabled and self.music_playlist:
-                self.start_background_music()
+            # Start or resume background music for GIFs
+            self.play_or_resume_background_music()
             
             # Start GIF animation
             self.gif_frame_index = 0
@@ -341,17 +339,17 @@ class FullscreenPlayer:
         """Called when video starts playing - check for audio and manage music"""
         def check_audio():
             self.video_has_audio = self.check_video_audio()
-            if not self.video_has_audio and self.music_enabled and self.music_playlist:
-                self.start_background_music()
+            if not self.video_has_audio:
+                self.master.after(0, self.play_or_resume_background_music)
             elif self.video_has_audio:
-                self.stop_background_music()
+                self.master.after(0, self.pause_background_music)
         
         # Run audio check in a separate thread to avoid blocking
         threading.Thread(target=check_audio, daemon=True).start()
     
-    # NEW: Start background music
-    def start_background_music(self):
-        """Start playing background music"""
+    # MODIFIED: Helper to load and play the current music track
+    def _load_and_play_current_music_track(self):
+        """Loads and plays the music track at the current index."""
         if not self.music_player or not self.music_playlist:
             return
         
@@ -363,35 +361,54 @@ class FullscreenPlayer:
                 self.music_player.play()
                 print(f"Playing background music: {os.path.basename(music_path)}")
             else:
-                print(f"Music file not found: {music_path}")
+                print(f"Music file not found, skipping: {music_path}")
                 self.next_music()
         except Exception as e:
-            print(f"Error starting background music: {e}")
+            print(f"Error loading music track: {e}")
+
+    # MODIFIED: Start or resume background music
+    def play_or_resume_background_music(self):
+        """Starts a new music track or resumes a paused one."""
+        if not self.music_player or not self.music_playlist or not self.music_enabled:
+            return
+        
+        try:
+            state = self.music_player.get_state()
+            if state == vlc.State.Paused:
+                self.music_player.play()
+                print("Resuming background music.")
+            elif state not in [vlc.State.Playing, vlc.State.Buffering]:
+                self._load_and_play_current_music_track()
+        except Exception as e:
+            print(f"Error in play_or_resume_background_music: {e}")
+
+    # MODIFIED: Pause background music
+    def pause_background_music(self):
+        """Pauses the background music if it is playing."""
+        if self.music_player and self.music_player.is_playing():
+            self.music_player.pause()
+            print("Pausing background music.")
     
-    # NEW: Stop background music
-    def stop_background_music(self):
-        """Stop playing background music"""
-        if self.music_player:
-            self.music_player.stop()
-    
-    # NEW: Go to next music track
+    # MODIFIED: Go to next music track
     def next_music(self):
-        """Move to next music track in playlist"""
+        """Move to next music track in playlist and plays it."""
         if not self.music_playlist:
             return
         
         self.current_music_index = (self.current_music_index + 1) % len(self.music_playlist)
-        if (self.current_media_type in ['image', 'gif'] or not self.video_has_audio) and self.music_enabled:
-            self.start_background_music()
+        self._load_and_play_current_music_track()
     
-    # NEW: Toggle music on/off
+    # MODIFIED: Toggle music on/off
     def toggle_music(self):
         """Toggle background music on/off"""
         self.music_enabled = not self.music_enabled
-        if self.music_enabled and (self.current_media_type in ['image', 'gif'] or not self.video_has_audio):
-            self.start_background_music()
+        if self.music_enabled:
+            # If toggling on, play only if the current media is silent.
+            if self.current_media_type in ['image', 'gif'] or not self.video_has_audio:
+                self.play_or_resume_background_music()
         else:
-            self.stop_background_music()
+            # If toggling off, always pause.
+            self.pause_background_music()
         print(f"Background music {'enabled' if self.music_enabled else 'disabled'}")
     
     # NEW: Volume control methods
@@ -504,16 +521,18 @@ class FullscreenPlayer:
             messagebox.showwarning("File Missing", f"Media not found:\n{media_path}")
             return
         
-        # Stop any ongoing animations and music
+        # Stop any ongoing animations
         self.stop_gif_animation()
-        self.stop_background_music()
+        # MODIFICATION: Do NOT stop music here, allow it to play between silent media
         
-        # NEW: Stop the video player if we're switching to non-video media
-        if self.current_media_type == 'video' and self.get_media_type(media_path) != 'video':
+        new_media_type = self.get_media_type(media_path)
+        
+        # Stop the video player if we're switching to non-video media
+        if self.current_media_type == 'video' and new_media_type != 'video':
             self.player.stop()
         
         # Determine media type and load accordingly
-        self.current_media_type = self.get_media_type(media_path)
+        self.current_media_type = new_media_type
         
         if self.current_media_type == 'image':
             self.load_image(media_path)
