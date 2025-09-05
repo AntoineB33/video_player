@@ -24,6 +24,7 @@ from config import DECRYPTED_MEDIA_PATH, PLAYLISTS_PATH, DEFAULT_MUSICS_FILE
 GWL_STYLE = -16
 WS_CURSOR = 0x0001  # Cursor visibility flag
 MUSIC_VOLUME = 30  # Volume for background music (0-100)
+VOLUME_STEP = 5    # Volume change step (0-100)
 
 # Image and GIF constants
 IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp'}
@@ -45,6 +46,10 @@ class FullscreenPlayer:
         self.music_instance = None
         self.video_has_audio = True
         self.music_enabled = True
+        
+        # NEW: Volume control attributes
+        self.video_volume = 100  # Video volume (0-100)
+        self.music_volume = MUSIC_VOLUME  # Background music volume (0-100)
         
         # NEW: Image/GIF handling attributes
         self.current_media_type = None  # 'video', 'image', or 'gif'
@@ -92,6 +97,7 @@ class FullscreenPlayer:
         self.instance = vlc.Instance(" ".join(vlc_options))
         self.player = self.instance.media_player_new()
         self.player.set_hwnd(self.video_frame.winfo_id())
+        self.player.audio_set_volume(self.video_volume)  # Set initial video volume
 
         # NEW: Setup music player
         self.setup_music_player()
@@ -286,7 +292,7 @@ class FullscreenPlayer:
                 ]
                 self.music_instance = vlc.Instance(" ".join(music_options))
                 self.music_player = self.music_instance.media_player_new()
-                self.music_player.audio_set_volume(MUSIC_VOLUME)
+                self.music_player.audio_set_volume(self.music_volume)
                 
                 # Setup music events
                 music_events = self.music_player.event_manager()
@@ -370,6 +376,33 @@ class FullscreenPlayer:
             self.stop_background_music()
         print(f"Background music {'enabled' if self.music_enabled else 'disabled'}")
     
+    # NEW: Volume control methods
+    def volume_up(self):
+        """Increase volume of currently playing audio"""
+        if self.current_media_type == 'video' and self.video_has_audio:
+            # Control video volume
+            self.video_volume = min(100, self.video_volume + VOLUME_STEP)
+            self.player.audio_set_volume(self.video_volume)
+            print(f"Video volume: {self.video_volume}%")
+        elif self.music_player and (self.current_media_type in ['image', 'gif'] or not self.video_has_audio):
+            # Control background music volume
+            self.music_volume = min(100, self.music_volume + VOLUME_STEP)
+            self.music_player.audio_set_volume(self.music_volume)
+            print(f"Background music volume: {self.music_volume}%")
+    
+    def volume_down(self):
+        """Decrease volume of currently playing audio"""
+        if self.current_media_type == 'video' and self.video_has_audio:
+            # Control video volume
+            self.video_volume = max(0, self.video_volume - VOLUME_STEP)
+            self.player.audio_set_volume(self.video_volume)
+            print(f"Video volume: {self.video_volume}%")
+        elif self.music_player and (self.current_media_type in ['image', 'gif'] or not self.video_has_audio):
+            # Control background music volume
+            self.music_volume = max(0, self.music_volume - VOLUME_STEP)
+            self.music_player.audio_set_volume(self.music_volume)
+            print(f"Background music volume: {self.music_volume}%")
+    
     # --- Global key press handler ---
     def on_press(self, key):
         try:
@@ -391,6 +424,10 @@ class FullscreenPlayer:
                 self.seek_forward()
             elif key == keyboard.Key.left and self.current_media_type == 'video':
                 self.seek_backward()
+            elif key == keyboard.Key.up:  # NEW: Volume up
+                self.volume_up()
+            elif key == keyboard.Key.down:  # NEW: Volume down
+                self.volume_down()
 
     def hide_cursor(self):
         try:
