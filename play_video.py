@@ -68,22 +68,22 @@ class FullscreenPlayer:
 
 
 
-        # master.attributes('-fullscreen', True)
-        # master.attributes('-topmost', True)
-        # master.configure(bg='black')
-        
-        # --- Change: Make windowed instead of fullscreen ---
-        window_width = 1280
-        window_height = 720
-        screen_width = master.winfo_screenwidth()
-        screen_height = master.winfo_screenheight()
-        x = (screen_width // 2) - (window_width // 2)
-        y = (screen_height // 2) - (window_height // 2)
-        master.geometry(f"{window_width}x{window_height}+{x}+{y}")
+        master.attributes('-fullscreen', True)
+        master.attributes('-topmost', True)
         master.configure(bg='black')
-        # Remove fullscreen and topmost attributes
-        # master.attributes('-fullscreen', True)
-        # master.attributes('-topmost', True)
+        
+        # # --- Change: Make windowed instead of fullscreen ---
+        # window_width = 1280
+        # window_height = 720
+        # screen_width = master.winfo_screenwidth()
+        # screen_height = master.winfo_screenheight()
+        # x = (screen_width // 2) - (window_width // 2)
+        # y = (screen_height // 2) - (window_height // 2)
+        # master.geometry(f"{window_width}x{window_height}+{x}+{y}")
+        # master.configure(bg='black')
+        # # Remove fullscreen and topmost attributes
+        # # master.attributes('-fullscreen', True)
+        # # master.attributes('-topmost', True)
 
 
 
