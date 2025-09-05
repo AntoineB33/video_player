@@ -97,7 +97,7 @@ def get_playlist_status(given_default = None, show_missings = True, get_all_vide
                         musics = [line.strip() for line in f if line.strip()]
                 suffix = check_media(musics, playlist, suffix, "musics", only_numbers)
             if only_numbers:
-                for media_type in ["media", "music"]:
+                for media_type in ["media", "musics"]:
                     suffix += f"\t{media_type} missing: {len(playlist['missing'][media_type])}, not decrypted: {len(playlist['not_decrypted'][media_type])}"
             playlist_infos.append((file, suffix, if_default))
 
