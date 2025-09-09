@@ -73,6 +73,21 @@
     
     <div id="result"></div>
 
+    <div id="uniqueCategories" style="margin-top:15px; padding:6px; border:1px solid #ccc; border-radius:4px; background:#f0f0f0;">
+      <strong>Unique Categories:</strong>
+      <div id="uniqueCategoriesList"><em>Loading...</em></div>
+    </div>
+
+    <div id="sharedCategories" style="margin-top:15px; padding:6px; border:1px solid #ccc; border-radius:4px; background:#f0f0f0;">
+      <strong>Shared Categories:</strong>
+      <div id="sharedCategoriesList"><em>Loading...</em></div>
+    </div>
+
+    <div id="sprawlPairs" style="margin-top:15px; padding:6px; border:1px solid #ccc; border-radius:4px; background:#f0f0f0;">
+      <strong>Closest Sprawl Pairs:</strong>
+      <div id="pairsList"><em>Loading...</em></div>
+    </div>
+
     <script>
 
       let cachedHistory = [];
@@ -237,6 +252,65 @@
       function goToCell(row, col) {
         google.script.run.activateCell(row, col);
       }
+
+      function updateUniqueCategories() {
+        google.script.run.withSuccessHandler(function(categories) {
+          const container = document.getElementById('uniqueCategoriesList');
+          if (categories.length === 0) {
+            container.innerHTML = "<em>No categories found</em>";
+            return;
+          }
+          let html = "<ul>";
+          categories.forEach(cat => {
+            html += `<li>${cat}</li>`;
+          });
+          html += "</ul>";
+          container.innerHTML = html;
+        }).getUniqueCategories();
+      }
+
+      updateUniqueCategories();
+      setInterval(updateUniqueCategories, 5000);
+
+      function updateSharedCategories() {
+        google.script.run.withSuccessHandler(function(categories) {
+          const container = document.getElementById('sharedCategoriesList');
+          if (categories.length === 0) {
+            container.innerHTML = "<em>No categories found</em>";
+            return;
+          }
+          let html = "<ul>";
+          categories.forEach(cat => {
+            html += `<li>${cat}</li>`;
+          });
+          html += "</ul>";
+          container.innerHTML = html;
+        }).getSharedCategories();
+      }
+
+      updateSharedCategories();
+      setInterval(updateSharedCategories, 5000);
+
+      function updateSprawlPairs() {
+        google.script.run.withSuccessHandler(function(pairs) {
+          const container = document.getElementById('pairsList');
+          if (pairs.length === 0) {
+            container.innerHTML = "<em>No pairs found</em>";
+            return;
+          }
+          let html = "<ul>";
+          pairs.forEach(p => {
+            html += `<li>[${p.category}]: 
+              Row ${p.row1} ↔ Row ${p.row2} (dist ${p.distance})</li>`;
+          });
+          html += "</ul>";
+          container.innerHTML = html;
+        }).getClosestSprawlPairs();
+      }
+
+      // load once + refresh periodically
+      updateSprawlPairs();
+      setInterval(updateSprawlPairs, 5000);
     </script>
   </body>
 </html>

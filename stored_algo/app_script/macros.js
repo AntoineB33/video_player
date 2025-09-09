@@ -163,3 +163,147 @@ function getCellHistory() {
   const history = props.getProperty('cellHistory');
   return history ? JSON.parse(history) : [];
 }
+
+function getUniqueCategories() {
+  const sheet = SpreadsheetApp.getActiveSheet();
+  const data = sheet.getDataRange().getValues();
+
+  if (data.length < 3) return [];
+
+  let categoriesCol = null;
+  for (let c = 0; c < data[1].length; c++) {
+    if (String(data[1][c]).trim().toLowerCase() === "sprawl" ||
+        String(data[1][c]).trim().toLowerCase() === "attributes") {
+      categoriesCol = c + 1; // 1-based column index
+      break;
+    }
+  }
+
+  if (!categoriesCol) {
+    return [];
+  }
+
+  // get categories that appear only in one row
+  const categoryCount = {};
+  for (let r = 3; r < data.length; r++) {
+    const categories = String(data[r][categoriesCol - 1]).trim();
+    for (let cat of categories.split(';').map(s => s.trim())) {
+      if (cat) {
+        categoryCount[cat] = (categoryCount[cat] || 0) + 1;
+      }
+    }
+  }
+  const uniqueCategories = Object.entries(categoryCount)
+    .filter(([cat, count]) => count === 1)
+    .map(([cat, count]) => cat);
+
+  return uniqueCategories;
+}
+
+function getSharedCategories() {
+  const sheet = SpreadsheetApp.getActiveSheet();
+  const data = sheet.getDataRange().getValues();
+
+  if (data.length < 3) return [];
+
+  let categoriesCol = null;
+  for (let c = 0; c < data[1].length; c++) {
+    if (String(data[1][c]).trim().toLowerCase() === "sprawl" ||
+        String(data[1][c]).trim().toLowerCase() === "attributes") {
+      categoriesCol = c + 1; // 1-based column index
+      break;
+    }
+  }
+
+  if (!categoriesCol) {
+    return [];
+  }
+
+  // get categories that appear in more than one row
+  const categoryCount = {};
+  for (let r = 3; r < data.length; r++) {
+    const categories = String(data[r][categoriesCol - 1]).trim();
+    for (let cat of categories.split(';').map(s => s.trim())) {
+      if (cat) {
+        categoryCount[cat] = (categoryCount[cat] || 0) + 1;
+      }
+    }
+  }
+  const sharedCategories = Object.entries(categoryCount)
+    .filter(([cat, count]) => count > 1)
+    .map(([cat, count]) => cat);
+
+  return sharedCategories;
+}
+
+/**
+ * Finds closest row pairs per sprawl column based on shared category and path filter.
+ * Returns: [{ colName, category, row1, row2, distance }]
+ */
+function getClosestSprawlPairs() {
+  const sheet = SpreadsheetApp.getActiveSheet();
+  const data = sheet.getDataRange().getValues();
+
+  if (data.length < 5) return [];
+
+  // Find "sprawl" and "path" columns from row 2
+  const headers = data[1].map(h => String(h).toLowerCase().trim());
+  const sprawlCols = [];
+  let pathCol = null;
+
+  headers.forEach((h, idx) => {
+    if (h.includes("sprawl")) sprawlCols.push(idx);
+    if (h.includes("path")) pathCol = idx;
+  });
+
+  if (sprawlCols.length === 0 || pathCol === null) return [];
+
+  const results = [];
+
+  sprawlCols.forEach(sc => {
+    const categoryRows = {};
+
+    // Collect rows by category, but only keep rows with non-empty "path"
+    for (let r = 3; r < data.length; r++) {
+      const category = String(data[r][sc]).trim();
+      const pathVal = String(data[r][pathCol]).trim();
+      if (category && pathVal) {
+        if (!categoryRows[category]) categoryRows[category] = [];
+        categoryRows[category].push(r + 1); // 1-based row index
+      }
+    }
+
+    // For each category, compute smallest distance
+    Object.entries(categoryRows).forEach(([cat, rows]) => {
+      if (rows.length < 3) return;
+      let minDist = Infinity;
+      let bestPair = null;
+
+      for (let i = 0; i < rows.length; i++) {
+        for (let j = i + 1; j < rows.length; j++) {
+          let d = Math.abs(rows[i] - rows[j]);
+          for (let k = rows[i] + 1; k < rows[j]; k++) {
+            if (!String(data[k - 1][pathCol]).trim()) {
+              d--; // reduce distance for each empty path in between
+            }
+          }
+          if (d < minDist) {
+            minDist = d;
+            bestPair = [rows[i], rows[j]];
+          }
+        }
+      }
+
+      if (bestPair) {
+        results.push({
+          category: cat,
+          row1: bestPair[0]+3,
+          row2: bestPair[1]+3,
+          distance: minDist
+        });
+      }
+    });
+  });
+
+  return results;
+}
