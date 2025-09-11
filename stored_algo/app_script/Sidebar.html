@@ -94,6 +94,46 @@
       let historyIndList = [];
       let currentSelectedTimestamp = null;
 
+      function find() {
+        const findText = document.getElementById('findText').value.trim();
+        if (!findText) return;
+
+        const resultDiv = document.getElementById('result');
+        resultDiv.innerHTML = '<div class="status-text">Searching... ⏳</div>';
+
+        google.script.run.withSuccessHandler(function(matches) {
+          if (matches.length > 0) {
+            let html = `Found ${matches.length} match(es):<ul>`;
+            matches.forEach(match => {
+              html += `<li><a onclick="goToCell(${match.row}, ${match.col})" title="Value: ${match.value}">Cell ${match.a1}</a></li>`;
+            });
+            html += `</ul>`;
+            resultDiv.innerHTML = html;
+          } else {
+            resultDiv.innerHTML = "No matches found.";
+          }
+        }).findMatches(findText);
+      }
+
+      function replace() {
+        const findText = document.getElementById('findText').value.trim();
+        const replaceText = document.getElementById('replaceText').value.trim();
+        if (!findText) return;
+
+        const resultDiv = document.getElementById('result');
+        resultDiv.innerHTML = '<div class="status-text">Replacing... ⏳</div>';
+
+        google.script.run.withSuccessHandler(function() {
+          resultDiv.innerHTML = "Replacement complete. ✅";
+          // refresh after replacement
+          updateCellElements();
+        }).replaceMatches(findText, replaceText);
+      }
+      
+      function goToCell(row, col) {
+        google.script.run.activateCell(row, col);
+      }
+
       // Fetch and display cell history
       function updateCellHistory() {
         google.script.run.withSuccessHandler(function(history) {
@@ -182,12 +222,12 @@
         }
       }
 
-      // 🔹 Fetch and show active cell elements (with possible links)
-      function updateCellElements() {
-        google.script.run.withSuccessHandler(function(elements) {
-          const container = document.getElementById('elementsList');
+      function updateData() {
+        google.script.run.withSuccessHandler(function(elements, uniqueCategories, sharedCategories, sprawlPairs) {
+          let container = document.getElementById('elementsList');
+          let html = '';
           if (elements.length > 0) {
-            let html = '<ul>';
+            html = '<ul>';
             elements.forEach(el => {
               if (el.isLink) {
                 html += `<li><a onclick="goToCell(${el.row}, ${el.col})">${el.text}</a></li>`;
@@ -200,117 +240,54 @@
           } else {
             container.innerHTML = '<em>(empty cell)</em>';
           }
-        }).getCellElementsWithLinks();
-      }
 
-      // Refresh elements when sidebar loads
-      updateCellElements();
-
-      // 🔹 Poll every 1s to detect cell change
-      setInterval(updateCellElements, 1000);
-
-      // Call on load and poll every 1s
-      updateCellHistory();
-      setInterval(updateCellHistory, 1000);
-
-      function find() {
-        const findText = document.getElementById('findText').value.trim();
-        if (!findText) return;
-
-        const resultDiv = document.getElementById('result');
-        resultDiv.innerHTML = '<div class="status-text">Searching... ⏳</div>';
-
-        google.script.run.withSuccessHandler(function(matches) {
-          if (matches.length > 0) {
-            let html = `Found ${matches.length} match(es):<ul>`;
-            matches.forEach(match => {
-              html += `<li><a onclick="goToCell(${match.row}, ${match.col})" title="Value: ${match.value}">Cell ${match.a1}</a></li>`;
-            });
-            html += `</ul>`;
-            resultDiv.innerHTML = html;
-          } else {
-            resultDiv.innerHTML = "No matches found.";
-          }
-        }).findMatches(findText);
-      }
-
-      function replace() {
-        const findText = document.getElementById('findText').value.trim();
-        const replaceText = document.getElementById('replaceText').value.trim();
-        if (!findText) return;
-
-        const resultDiv = document.getElementById('result');
-        resultDiv.innerHTML = '<div class="status-text">Replacing... ⏳</div>';
-
-        google.script.run.withSuccessHandler(function() {
-          resultDiv.innerHTML = "Replacement complete. ✅";
-          // refresh after replacement
-          updateCellElements();
-        }).replaceMatches(findText, replaceText);
-      }
-      
-      function goToCell(row, col) {
-        google.script.run.activateCell(row, col);
-      }
-
-      function updateUniqueCategories() {
-        google.script.run.withSuccessHandler(function(categories) {
-          const container = document.getElementById('uniqueCategoriesList');
-          if (categories.length === 0) {
+          
+          container = document.getElementById('uniqueCategoriesList');
+          if (uniqueCategories.length === 0) {
             container.innerHTML = "<em>No categories found</em>";
             return;
           }
-          let html = "<ul>";
-          categories.forEach(cat => {
+          html = "<ul>";
+          uniqueCategories.forEach(cat => {
             html += `<li>${cat}</li>`;
           });
           html += "</ul>";
           container.innerHTML = html;
-        }).getUniqueCategories();
-      }
 
-      updateUniqueCategories();
-      setInterval(updateUniqueCategories, 5000);
-
-      function updateSharedCategories() {
-        google.script.run.withSuccessHandler(function(categories) {
-          const container = document.getElementById('sharedCategoriesList');
-          if (categories.length === 0) {
+          container = document.getElementById('sharedCategoriesList');
+          if (sharedCategories.length === 0) {
             container.innerHTML = "<em>No categories found</em>";
             return;
           }
-          let html = "<ul>";
-          categories.forEach(cat => {
+          html = "<ul>";
+          sharedCategories.forEach(cat => {
             html += `<li>${cat}</li>`;
           });
           html += "</ul>";
           container.innerHTML = html;
-        }).getSharedCategories();
-      }
 
-      updateSharedCategories();
-      setInterval(updateSharedCategories, 5000);
-
-      function updateSprawlPairs() {
-        google.script.run.withSuccessHandler(function(pairs) {
-          const container = document.getElementById('pairsList');
+          
+          container = document.getElementById('pairsList');
           if (pairs.length === 0) {
             container.innerHTML = "<em>No pairs found</em>";
             return;
           }
-          let html = "<ul>";
+          html = "<ul>";
           pairs.forEach(p => {
             html += `<li>[${p.category}]: 
               Row ${p.row1} ↔ Row ${p.row2} (dist ${p.distance})</li>`;
           });
           html += "</ul>";
           container.innerHTML = html;
-        }).getClosestSprawlPairs();
+        }).getEverything();
       }
 
-      // load once + refresh periodically
-      updateSprawlPairs();
-      setInterval(updateSprawlPairs, 5000);
+      updateData();
+      setInterval(updateData, 1000);
+
+      // Call on load and poll every 1s
+      updateCellHistory();
+      setInterval(updateCellHistory, 1000);
     </script>
   </body>
 </html>

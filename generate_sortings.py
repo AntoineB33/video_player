@@ -780,7 +780,7 @@ def accumulate_dependencies(graph, warnings):
         dfs(node, [], warnings)
     return result
 
-def sorter(name, table, roles, errors, warnings, preload_thread, fst_row, fst_col, musics, music_col):
+def sorter(name, table, roles, errors, warnings, preload_thread, musics, music_col):
     path_index = roles.index('path') if 'path' in roles else -1
     if path_index == -1:
         errors.append("Error: 'path' role not found in roles")
@@ -1110,7 +1110,7 @@ if __name__ == "__main__":
             roles = roles[:music_col] + roles[music_col + 1:]
             musics = [row[music_col] for row in table]
             table = [row[:music_col] + row[music_col + 1:] for row in table]
-        result = sorter(name, table, roles, errors, warnings, preload_thread, fst_row, fst_col, musics, music_col)
+        result = sorter(name, table, roles, errors, warnings, preload_thread, musics, music_col)
     if errors:
         print("Errors found:")
         for error in errors:
