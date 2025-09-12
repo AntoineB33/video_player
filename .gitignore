@@ -3,3 +3,4 @@ data/**
 plugins/**
 **.pyc
 config.py
+node_modules/**

@@ -898,8 +898,8 @@ def sorter(name, table, roles, errors, warnings, preload_thread, musics, music_c
     to_old_indexes = []
     cat_rows = []
     new_index = 0
-    for i, row in enumerate(table[1:], start=1):
-        if row[path_index]:
+    for i in range(1, len(table)):
+        if urls[i][0]:
             is_valid[i] = True
             valid_row_indexes.append(i)
             new_indexes[i] = new_index

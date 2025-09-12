@@ -223,7 +223,7 @@
       }
 
       function updateData() {
-        google.script.run.withSuccessHandler(function(elements, uniqueCategories, sharedCategories, sprawlPairs) {
+        google.script.run.withSuccessHandler(function(elements, categories, sprawlPairs, errors, warnings) {
           let container = document.getElementById('elementsList');
           let html = '';
           if (elements.length > 0) {
