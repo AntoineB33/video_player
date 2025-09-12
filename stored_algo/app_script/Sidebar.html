@@ -11,6 +11,14 @@
       }
       #result { margin-top: 12px; }
       ul { list-style-type: none; padding-left: 0; }
+      .nested {
+        display: none;
+        margin-left: 1em;
+      }
+      .expandable {
+        cursor: pointer;
+        font-weight: bold;
+      }
       li a { 
         display: block;
         padding: 4px;
@@ -73,14 +81,9 @@
     
     <div id="result"></div>
 
-    <div id="uniqueCategories" style="margin-top:15px; padding:6px; border:1px solid #ccc; border-radius:4px; background:#f0f0f0;">
-      <strong>Unique Categories:</strong>
-      <div id="uniqueCategoriesList"><em>Loading...</em></div>
-    </div>
-
-    <div id="sharedCategories" style="margin-top:15px; padding:6px; border:1px solid #ccc; border-radius:4px; background:#f0f0f0;">
-      <strong>Shared Categories:</strong>
-      <div id="sharedCategoriesList"><em>Loading...</em></div>
+    <div id="categories" style="margin-top:15px; padding:6px; border:1px solid #ccc; border-radius:4px; background:#f0f0f0;">
+      <strong>Categories:</strong>
+      <div id="categoriesList"><em>Loading...</em></div>
     </div>
 
     <div id="sprawlPairs" style="margin-top:15px; padding:6px; border:1px solid #ccc; border-radius:4px; background:#f0f0f0;">
@@ -223,12 +226,12 @@
       }
 
       function updateData() {
-        google.script.run.withSuccessHandler(function(elements, categories, sprawlPairs, errors, warnings) {
+        google.script.run.withSuccessHandler(function(result) {
           let container = document.getElementById('elementsList');
           let html = '';
-          if (elements.length > 0) {
+          if (result.cellElementsWithLinks.length > 0) {
             html = '<ul>';
-            elements.forEach(el => {
+            result.cellElementsWithLinks.forEach(el => {
               if (el.isLink) {
                 html += `<li><a onclick="goToCell(${el.row}, ${el.col})">${el.text}</a></li>`;
               } else {
@@ -242,29 +245,37 @@
           }
 
           
-          container = document.getElementById('uniqueCategoriesList');
-          if (uniqueCategories.length === 0) {
-            container.innerHTML = "<em>No categories found</em>";
-            return;
-          }
-          html = "<ul>";
-          uniqueCategories.forEach(cat => {
-            html += `<li>${cat}</li>`;
-          });
-          html += "</ul>";
-          container.innerHTML = html;
 
-          container = document.getElementById('sharedCategoriesList');
-          if (sharedCategories.length === 0) {
-            container.innerHTML = "<em>No categories found</em>";
-            return;
-          }
-          html = "<ul>";
-          sharedCategories.forEach(cat => {
-            html += `<li>${cat}</li>`;
+
+          container = document.getElementById("categoriesList");
+
+          result.categories.categories.forEach(([title, subItems]) => {
+            const li = document.createElement("li");
+
+            // main clickable item
+            const main = document.createElement("span");
+            main.textContent = title;
+            main.classList.add("expandable");
+
+            // sub-list
+            const subUl = document.createElement("ul");
+            subUl.classList.add("nested");
+
+            subItems.forEach(sub => {
+              const subLi = document.createElement("li");
+              subLi.textContent = sub;
+              subUl.appendChild(subLi);
+            });
+
+            // toggle expand/collapse
+            main.addEventListener("click", () => {
+              subUl.style.display = subUl.style.display === "none" ? "block" : "none";
+            });
+
+            li.appendChild(main);
+            li.appendChild(subUl);
+            container.appendChild(li);
           });
-          html += "</ul>";
-          container.innerHTML = html;
 
           
           container = document.getElementById('pairsList');

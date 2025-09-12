@@ -182,7 +182,7 @@ function accumulateDependencies(graph, warnings) {
 
       const res = dfs(neighbor, [...path], warnings);
       for (const [key, value] of Object.entries(res)) {
-        accumulated[key] = [value[0], [...value[1], node]];
+        accumulated[key] = [value[0], [...value[1], node], value[2]];
         if (key in graph[node]) {
           warnings.push(
             `Warning: ${JSON.stringify(key)} has a redundant dependency ${JSON.stringify(node)} given by ${accumulated[key][1].join(" -> ")}`,
@@ -204,15 +204,15 @@ function accumulateDependencies(graph, warnings) {
 }
 
 function getCategories(table, result, musics, music_col, roles, name) {
-  const pathIndex = roles.includes("path") ? roles.indexOf("path") : -1;
+  const pathIndex = roles.includes(Roles.PATH) ? roles.indexOf(Roles.PATH) : -1;
   if (pathIndex === -1) {
     errors.push("Error: 'path' role not found in roles");
-    return result;
+    return;
   }
   const errors = result.errors;
   const warnings = result.warnings;
 
-  let nameIndex = roles.indexOf(Roles.NAMES);
+  const nameIndex = roles.includes(Roles.NAMES) ? roles.indexOf(Roles.NAMES) : -1;
   result.row_to_names = Array.from({ length: table.length }, () => []);
   for (let i = 0; i < table.length; i++) {
     for (let j = 0; j < table[i].length; j++) {
@@ -221,7 +221,7 @@ function getCategories(table, result, musics, music_col, roles, name) {
         cells[k] = cells[k].trim();
         if (j !== pathIndex) {
           cells[k] = cells[k].toLowerCase();
-          if (roles[j] === "attributes" || roles[j] === "sprawl") {
+          if (roles[j] === Roles.ATTRIBUTES || roles[j] === Roles.SPRWAL) {
             if (cells[k].endsWith("-fst")) {
               cells[k] = cells[k].slice(0, -4).trim() + " -fst";
             } else if (cells[k].endsWith("-lst")) {
@@ -264,7 +264,7 @@ function getCategories(table, result, musics, music_col, roles, name) {
         errors.push(
           `Error in row ${i}, column ${alph[nameIndex]}: ${JSON.stringify(name)} is not a valid name`,
         );
-        return result;
+        return;
       }
 
       const match = name.match(/ -(\w+)$/);
@@ -299,11 +299,10 @@ function getCategories(table, result, musics, music_col, roles, name) {
       }
       names[name] = i;
     }
-    }
   }
 
   if (errors.length > 0) {
-    return result;
+    return;
   }
 
   let attributes = {};
@@ -315,8 +314,8 @@ function getCategories(table, result, musics, music_col, roles, name) {
   for (let i = 1; i < table.length; i++) {
     const row = table[i];
     for (let j = 0; j < row.length; j++) {
-      const isSprawl = roles[j] === "sprawl";
-      if (roles[j] === "attributes" || isSprawl) {
+      const isSprawl = roles[j] === Roles.SPRWAL;
+      if (roles[j] === Roles.ATTRIBUTES || isSprawl) {
         if (!row[j]) {
           continue;
         }
@@ -327,7 +326,7 @@ function getCategories(table, result, musics, music_col, roles, name) {
             errors.push(
               `Error in row ${i}, column ${alph[j]}: empty attribute name`,
             );
-            return result;
+            return;
           }
 
           let isFst = instr.endsWith("-fst");
@@ -345,21 +344,20 @@ function getCategories(table, result, musics, music_col, roles, name) {
             errors.push(
               `Error in row ${i}, column ${alph[j]}: '-fst' is not at the end of ${JSON.stringify(instr)}`,
             );
-            return result;
+            return;
           }
 
-          let k;
+          let k = -1;
           const numK = parseInt(instr);
           if (!isNaN(numK)) {
             if (numK < 1 || numK > table.length - 1) {
               errors.push(
                 `Error in row ${i}, column ${alph[j]}: ${JSON.stringify(instr)} points to an invalid row ${numK}`,
               );
-              return result;
+              return;
             }
             k = numK;
           } else {
-            k = -1;
             if (instr in names) {
               k = names[instr];
             }
@@ -374,7 +372,7 @@ function getCategories(table, result, musics, music_col, roles, name) {
           }
 
           if (!(i in attributes[k])) {
-            attributes[k][i] = [isSprawl, [k]];
+            attributes[k][i] = [isSprawl, [k], j];
           } else {
             warnings.push(
               `Redundant attribute ${JSON.stringify(instr)} in row ${i}, column ${alph[j]}`,
@@ -412,7 +410,7 @@ function getCategories(table, result, musics, music_col, roles, name) {
           errors.push(
             `Error in row ${i}, column ${alph[pathIndex]}: a URL given by ${path1} conflicts with another given by ${path2}`,
           );
-          return result;
+          return;
         }
         urls[k] = [row[pathIndex], attributes[i][k][1]];
       }
@@ -440,11 +438,11 @@ function getCategories(table, result, musics, music_col, roles, name) {
 
   if (validRowIndexes.length === 0) {
     errors.push("Error: No valid rows found in the table!");
-    return result;
+    return;
   }
 
   for (const cat of Object.keys(attributes)) {
-    if (typeof cat !== "integer") {
+    if (typeof cat !== "number") {
       continue;
     }
     const filtered = {};
@@ -458,14 +456,14 @@ function getCategories(table, result, musics, music_col, roles, name) {
       delete attributes[cat];
     }
   }
-  const categories = table[0].map((colName, colIndex) => {
+  const categories = table[0].concat(["Pointers"]).map((colName, colIndex) => {
     return {
       colIndex: colIndex,
       colName: colName,
       categories: [],
     }
   });
-  const sprawlPairs = table[0].map((colName, colIndex) => {
+  const sprawlPairs = table[0].concat(["Pointers"]).map((colName, colIndex) => {
     return {
       colIndex: colIndex,
       colName: colName,
@@ -473,8 +471,16 @@ function getCategories(table, result, musics, music_col, roles, name) {
     }
   });
   for (const [key, rows] of Object.entries(attributes)) {
-    categories[key[1]].categories.push({
-      category: key[0],
+    let col, cat;
+    if (typeof key === "number") {
+      col = table[0].length; // Pointers column
+      cat = key;
+    } else {
+      col = key[1];
+      cat = key[0];
+    }
+    categories[col].categories.push({
+      category: cat,
       rows: Object.keys(rows),
     });
     if (rows.length < 2) continue;
@@ -495,7 +501,7 @@ function getCategories(table, result, musics, music_col, roles, name) {
       }
     }
     if (bestPair) {
-      sprawlPairs[key[1]].pairs.push({
+      sprawlPairs[col].pairs.push({
         category: cat,
         row1: bestPair[0],
         row2: bestPair[1],
@@ -526,16 +532,15 @@ function getCategories(table, result, musics, music_col, roles, name) {
   const instrTable = Array.from({ length: table.length }, () => []);
 
   for (const [k, v] of Object.entries(fstCat)) {
-    const kInt = parseInt(k);
-    if (isValid[kInt]) {
+    if (isValid[k]) {
       let t = v;
       while (t in fstCat) {
         t = fstCat[t];
       }
       for (const i of Object.keys(attributes[t])) {
-        if (parseInt(i) !== kInt) {
+        if (i !== k) {
           instrTable[i].push(
-            new InstrStruct(true, false, [newIndexes[kInt]], [[-Infinity, -1]]),
+            new InstrStruct(true, false, [newIndexes[k]], [[-Infinity, -1]]),
           );
         }
       }
@@ -543,16 +548,15 @@ function getCategories(table, result, musics, music_col, roles, name) {
   }
 
   for (const [k, v] of Object.entries(lstCat)) {
-    const kInt = parseInt(k);
-    if (isValid[kInt]) {
+    if (isValid[k]) {
       let t = v;
       while (t in lstCat) {
         t = lstCat[t];
       }
       for (const i of Object.keys(attributes[t])) {
-        if (parseInt(i) !== kInt) {
+        if (i !== k) {
           instrTable[i].push(
-            new InstrStruct(true, false, [newIndexes[kInt]], [[1, Infinity]]),
+            new InstrStruct(true, false, [newIndexes[k]], [[1, Infinity]]),
           );
         }
       }
@@ -593,7 +597,7 @@ function getCategories(table, result, musics, music_col, roles, name) {
 
     const row = table[i];
     for (let j = 0; j < row.length; j++) {
-      if (roles[j] === "dependencies" && row[j]) {
+      if (roles[j] === Rules.DEPENDENCIES && row[j]) {
         const cellList = row[j].split("; ");
         for (let instr of cellList) {
           if (instr) {
@@ -605,7 +609,7 @@ function getCategories(table, result, musics, music_col, roles, name) {
               errors.push(
                 `Error in row ${i}, column ${alph[j]}: ${JSON.stringify(instr)} does not match dependencies pattern ${JSON.stringify(depPattern[j])}`,
               );
-              return result;
+              return;
             }
 
             if (depPattern[j].length > 1) {
@@ -626,7 +630,7 @@ function getCategories(table, result, musics, music_col, roles, name) {
                 errors.push(
                   `Error in row ${i}, column ${alph[j]}: ${JSON.stringify(instr)} does not match expected format`,
                 );
-                return result;
+                return;
               }
               intervals = getIntervals(instr);
             }
@@ -640,7 +644,7 @@ function getCategories(table, result, musics, music_col, roles, name) {
                 errors.push(
                   `Error in row ${i}, column ${alph[j]}: invalid number.`,
                 );
-                return result;
+                return;
               }
               if (table[number][pathIndex]) {
                 numbers.push(number);
@@ -650,7 +654,7 @@ function getCategories(table, result, musics, music_col, roles, name) {
               errors.push(
                 `Error in row ${i}, column ${alph[j]}: ${JSON.stringify(instr)} does not match expected format`,
               );
-              return result;
+              return;
             }
 
             if (name in attributes) {
@@ -662,7 +666,7 @@ function getCategories(table, result, musics, music_col, roles, name) {
                 errors.push(
                   `Error in row ${i}, column ${alph[j]}: attribute ${JSON.stringify(name)} does not exist`,
                 );
-                return result;
+                return;
               }
               if (table[names[name]][pathIndex]) {
                 numbers.push(names[name]);
@@ -693,7 +697,7 @@ function getCategories(table, result, musics, music_col, roles, name) {
 
   for (const i of validRowIndexes) {
     for (const j of attributesTable[i]) {
-      if (typeof j === "integer") {
+      if (typeof j === "number") {
         for (const x2 of instrTable[j]) {
           const x = JSON.parse(JSON.stringify(x2)); // deep copy
           if (
@@ -785,7 +789,7 @@ function getCategories(table, result, musics, music_col, roles, name) {
           )
           .join(p === 1 ? " after " : " before ");
         errors.push(`Cycle detected: ${cycleStr}`);
-        return result;
+        return;
       }
     }
   }
@@ -814,17 +818,10 @@ function getCategories(table, result, musics, music_col, roles, name) {
 
   // TODO: solve sorting pb
 
-  return result;
+  return;
 }
 
-function normalize(sheet, table) {
-  const result = {
-    categories: [],
-    sprawlPairs: [],
-    row_to_names: [],
-    errors: [],
-    warnings: [],
-  };
+function normalize(sheet, table, result, roles) {
   let crop_line = table.length;
   let crop_column = table[0].length;
   for (let r = crop_line - 1; r >= 0; r--) {
@@ -840,15 +837,12 @@ function normalize(sheet, table) {
     crop_column--;
   }
   table = table.slice(0, crop_line).map((row) => row.slice(0, crop_column));
-  const roles = table[1];
-  table.splice(1, 1);
   let music_col = -1;
   let musics = [];
   const name = sheet.getName();
   if (name === "s") {
     errors.push(`Error: Invalid role '${role}' - 's' is a reserved name`);
-    foundError = true;
-    return result;
+    return;
   }
   let foundError = false;
   for (let i = 0; i < roles.length; i++) {
@@ -879,9 +873,9 @@ function normalize(sheet, table) {
       ]);
     }
     getCategories(table, result, musics, music_col, roles, name);
-    return result;
+    return;
   }
-  return result;
+  return;
 }
 
 function getEverything2() {

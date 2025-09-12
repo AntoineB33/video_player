@@ -5,6 +5,10 @@ function onOpen() {
     .addToUi();
 }
 
+function onEdit(e) {
+  PropertiesService.getScriptProperties().setProperty("wasEdited", "true");
+}
+
 function toA1Notation(row, col) {
   let colStr = "";
   while (col > 0) {
@@ -95,30 +99,17 @@ function activateCell(row, col) {
  * If an element ends with " -fst", we search using the version without that suffix.
  * Returns an array of objects with { text, row, col, isLink }.
  */
-function getCellElementsWithLinks(sheet, data) {
+function getCellElementsWithLinks(sheet, data, roles) {
   const cell = sheet.getActiveRange();
   if (!cell) return [];
 
-  const value = cell.getValue();
-  if (typeof value !== "string") return [];
+  const value = cell.getValue().split(";").map((s) => s.trim().toLowerCase()).filter((s) => s).join("; ");
 
   const elements = value
     .split(";")
     .map((s) => s.trim())
     .filter((s) => s);
-
-  let nameIndex = roles.indexOf(Roles.NAMES);
-
-  if (nameIndex === -1) {
-    // No "names" column found → return plain list
-    return elements.map((el) => ({
-      text: el,
-      row: null,
-      col: null,
-      isLink: false,
-    }));
-  }
-
+  const nameIndex = roles.includes(Roles.NAMES) ? roles.indexOf(Roles.NAMES) : -1;
   const result = [];
   elements.forEach((el) => {
     // 🔹 If element ends with " -fst", strip it for lookup
@@ -129,7 +120,7 @@ function getCellElementsWithLinks(sheet, data) {
     // search in "names" column starting from row 3 (below headers)
     for (let r = 2; r < data.length; r++) {
       if (
-        data[r][namesCol - 1]
+        data[r][nameIndex - 1]
           .split(";")
           .map((s) => s.trim())
           .filter((s) => s)
@@ -202,7 +193,24 @@ function generateUniqueStrings(n) {
   return result;
 }
 
-function getEverything() {
+function getRoles() {
+  return JSON.parse(PropertiesService.getScriptProperties().getProperty("roles"));
+}
+
+function getEverything(roles) {
+  let result = {
+    categories: [],
+    sprawlPairs: [],
+    cellElementsWithLinks: getCellElementsWithLinks(sheet, table, roles),
+    row_to_names: [],
+    errors: [],
+    warnings: [],
+    nameIndex: -1,
+    wasEdited: PropertiesService.getScriptProperties().getProperty("wasEdited") === "true",
+  };
+  if (result.wasEdited !== "true") {
+    return result;
+  }
   const sheet = SpreadsheetApp.getActiveSheet();
   const table = sheet.getDataRange().getValues();
   table.forEach((row) =>
@@ -213,6 +221,6 @@ function getEverything() {
       row[idx] = row[idx].trim().toLowerCase();
     }),
   );
-  const cellElements = getCellElementsWithLinks(sheet, table);
-  return { cellElements, ...normalize(sheet, table) };
+  normalize(sheet, table, result, roles);
+  return result;
 }
